@@ -48,10 +48,12 @@ import StellarConnectionQualityBadge from '@/components/common/StellarConnection
 import { useAccount } from 'wagmi';
 import { useNetworkMismatch } from '@/hooks/useNetworkMismatch';
 import {
+	useSelfFreezeMutation,
 	useTradeMutation,
 	useWalletHoldings,
 	useReinvestDividendMutation,
 	useRedeemDeprecatedKeyMutation,
+	type SelfFreezeAction,
 } from '@/hooks/useWallet';
 import showToast from '@/utils/toast.util';
 import { getSignatureErrorMessage } from '@/utils/errorHandling.utils';
@@ -65,6 +67,7 @@ import {
 	calculatePnLSummary,
 	formatPnLDisplay,
 	formatPnLPercentage,
+	type HeldKeyPosition,
 } from '@/utils/portfolioValue.utils';
 import PrecisionModeToggle, {
 	type PrecisionMode,
@@ -82,9 +85,11 @@ import {
 } from '@/utils/cardEntryAnimation.utils';
 import {
 	resolveCreatorKeyPriceStroops,
-	formatDisplayKeyPrice,
 } from '@/utils/keyPriceDisplay.utils';
 import { estimateReinvest } from '@/utils/reinvestDividend.utils';
+import { useTradeKeyboardShortcuts } from '@/hooks/useTradeKeyboardShortcuts';
+import KeyboardShortcutsHelp from '@/components/common/KeyboardShortcutsHelp';
+import TradeShortcutHints from '@/components/common/TradeShortcutHints';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import { useNavigationTiming } from '@/hooks/useNavigationTiming';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
@@ -96,6 +101,7 @@ import CreatorListPagination from '@/components/common/CreatorListPagination';
 import CreatorListGroupSeparator from '@/components/common/CreatorListGroupSeparator';
 import MarketplaceSidebar from '@/components/common/MarketplaceSidebar';
 import { copyTextToClipboard } from '@/utils/clipboard.utils';
+import SelfFreezeDialog from '@/components/common/SelfFreezeDialog';
 
 const FEATURED_CREATOR_FACTS = [
 	{ label: 'Membership', value: 'Collectors Circle' },
@@ -217,36 +223,6 @@ const CREATOR_REFRESH_SHORTCUT_DURATION_MS = 1800;
 const getFetchRetryHelperCopy = (attempt: number, maxAttempts: number) =>
 	`We couldn't load live creators yet. Retrying automatically (attempt ${attempt} of ${maxAttempts}).`;
 
-const isEditableShortcutTarget = (target: EventTarget | null) => {
-	if (!(target instanceof Element)) return false;
-
-	let element: Element | null = target;
-	while (element) {
-		if (
-			element.matches('input, textarea, select, [role="textbox"]') ||
-			(element instanceof HTMLElement && element.isContentEditable)
-		) {
-			return true;
-		}
-		element = element.parentElement;
-	}
-
-	return false;
-};
-
-const isCreatorRefreshShortcut = (event: KeyboardEvent) =>
-	(event.ctrlKey || event.metaKey) &&
-	event.altKey &&
-	!event.shiftKey &&
-	event.key.toLowerCase() === 'r';
-
-const isTradeShortcut = (event: KeyboardEvent) =>
-	!event.ctrlKey &&
-	!event.metaKey &&
-	!event.altKey &&
-	!event.shiftKey &&
-	event.key.toLowerCase() === 't';
-
 const toPriceFilterValue = (value: string) => {
 	if (!value.trim()) return undefined;
 	const parsed = Number(value);
@@ -299,6 +275,10 @@ function LandingPage() {
 	const [tradeSide, setTradeSide] = useState<TradeSide>('buy');
 	const [tradeDialogOpen, setTradeDialogOpen] = useState(false);
 	const [tradeSubmitting, setTradeSubmitting] = useState(false);
+	const [selfFreezeDialog, setSelfFreezeDialog] = useState<{
+		action: SelfFreezeAction;
+		position: HeldKeyPosition;
+	} | null>(null);
 	const [stellarAddressCopied, setStellarAddressCopied] = useState(false);
 	const prefersReducedMotion = usePrefersReducedMotion();
 	const [sortOption, setSortOption] = useState<CourseSortOption>(() => {
@@ -324,6 +304,7 @@ function LandingPage() {
 	const [isPriceRefreshing, setIsPriceRefreshing] = useState(false);
 	const [showShortcutConfirmation, setShowShortcutConfirmation] =
 		useState(false);
+	const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
 	const [page, setPage] = useState(() => {
 		if (typeof window === 'undefined') return 0;
 		const saved = window.sessionStorage.getItem(CREATOR_PAGE_KEY);
@@ -757,26 +738,6 @@ function LandingPage() {
 		}, CREATOR_REFRESH_SHORTCUT_DURATION_MS);
 	}, []);
 
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (
-				event.defaultPrevented ||
-				event.repeat ||
-				!isCreatorRefreshShortcut(event) ||
-				isEditableShortcutTarget(event.target)
-			) {
-				return;
-			}
-
-			event.preventDefault();
-			handleRetryCreatorFetch();
-			showCreatorRefreshShortcutConfirmation();
-		};
-
-		window.addEventListener('keydown', handleKeyDown);
-		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [handleRetryCreatorFetch, showCreatorRefreshShortcutConfirmation]);
-
 	// Stale-data detection (#301). 60s freshness window; when we cross it,
 	// the hook fires a background refresh exactly once until the next
 	// successful fetch resets the baseline.
@@ -806,6 +767,7 @@ function LandingPage() {
 	const activeWalletAddress = connectedAddress || DEMO_WALLET_ADDRESS;
 
 	const tradeMutation = useTradeMutation(activeWalletAddress);
+	const selfFreezeMutation = useSelfFreezeMutation(activeWalletAddress);
 	const reinvestMutation = useReinvestDividendMutation(activeWalletAddress);
 	const redeemMutation = useRedeemDeprecatedKeyMutation(activeWalletAddress);
 	const { data: cachedHoldings = [] } = useWalletHoldings(activeWalletAddress);
@@ -831,6 +793,9 @@ function LandingPage() {
 						quantity: cached?.quantity ?? baseQuantity,
 						priceStroops: creator.priceStroops,
 						price: creator.price,
+										frozenQuantity: cached?.frozenQuantity ?? 0,
+										liquidQuantity:
+											cached?.liquidQuantity ?? cached?.quantity ?? baseQuantity,
 						isPriceLoading: isPriceRefreshing,
 						isPriceStale: creatorsAreStale,
 						pending: cached?.pending ?? false,
@@ -874,25 +839,80 @@ function LandingPage() {
 		setTradeDialogOpen(true);
 	}, []);
 
-	// Issue 554: T key opens the trade panel from the creator profile page.
-	useEffect(() => {
-		const handleTradeShortcut = (event: KeyboardEvent) => {
-			if (
-				event.defaultPrevented ||
-				event.repeat ||
-				!isTradeShortcut(event) ||
-				isEditableShortcutTarget(event.target)
-			) {
-				return;
-			}
+	const handleConfirmTradeViaShortcut = useCallback(() => {
+		const confirmButton = document.querySelector(
+			'[data-testid="trade-dialog-confirm"]'
+		) as HTMLButtonElement | null;
+		confirmButton?.click();
+	}, []);
 
-			event.preventDefault();
-			openTradeDialog('buy');
-		};
+	const openSelfFreezeDialog = useCallback(
+		(action: SelfFreezeAction, position: HeldKeyPosition) => {
+			setSelfFreezeDialog({ action, position });
+		},
+		[]
+	);
 
-		window.addEventListener('keydown', handleTradeShortcut);
-		return () => window.removeEventListener('keydown', handleTradeShortcut);
-	}, [openTradeDialog]);
+	const handleConfirmSelfFreeze = async (amount: number) => {
+		if (!selfFreezeDialog) return;
+		const { action, position } = selfFreezeDialog;
+		try {
+			await selfFreezeMutation.mutateAsync({
+				creatorId: position.creatorId,
+				amount,
+				action,
+			});
+			setSelfFreezeDialog(null);
+			showToast.transactionSuccess(
+				`${action === 'freeze' ? 'Freeze' : 'Unfreeze'} confirmed`,
+				`${action === 'freeze' ? 'Froze' : 'Unfroze'} ${formatNumber(amount)} key${amount === 1 ? '' : 's'}`
+			);
+		} catch {
+			// The mutation reports the signing error and restores its optimistic cache.
+		}
+	};
+
+	// Toggle shortcuts help dialog
+	const toggleShortcutsHelp = useCallback(() => {
+		setShortcutsHelpOpen(prev => !prev);
+	}, []);
+
+	// Focus search bar via keyboard shortcut
+	const handleFocusSearch = useCallback(() => {
+		const searchInput = document.querySelector(
+			'[data-testid="search-bar-input"]'
+		) as HTMLInputElement | null;
+		searchInput?.focus();
+		searchInput?.select();
+	}, []);
+
+	// Switch profile tabs via keyboard shortcut
+	const handleTabShortcut = useCallback((tab: string) => {
+		setActiveProfileTab(tab);
+	}, []);
+
+	// Navigate to portfolio page via keyboard shortcut
+	const handleNavigateToPortfolio = useCallback(() => {
+		window.location.assign('/profile');
+	}, []);
+
+	// Centralised keyboard-shortcut manager for power trading
+	useTradeKeyboardShortcuts({
+		tradeDialogOpen,
+		onOpenTradeDialog: openTradeDialog,
+		onConfirmTrade: handleConfirmTradeViaShortcut,
+		isSubmitting: tradeSubmitting,
+		isFormValid: !tradeSubmitting,
+		helpOpen: shortcutsHelpOpen,
+		onToggleHelp: toggleShortcutsHelp,
+		onRefreshCreators: () => {
+			handleRetryCreatorFetch();
+			showCreatorRefreshShortcutConfirmation();
+		},
+		onTabChange: handleTabShortcut,
+		onFocusSearch: handleFocusSearch,
+		onNavigateToPortfolio: handleNavigateToPortfolio,
+	});
 
 	const handleCopyStellarAddress = async () => {
 		try {
@@ -1592,45 +1612,35 @@ function LandingPage() {
 												creator={creator}
 												onBuy={() => openTradeDialog('buy')}
 												onSell={() => openTradeDialog('sell')}
-												onReinvest={async creatorId => {
-													const pos = heldKeyPositions.find(
-														p => p.creatorId === creatorId
-													);
-													const keyPriceStroops =
-														resolveCreatorKeyPriceStroops(
-															pos ?? {}
-														);
-													const estimate = estimateReinvest(
-														pos?.unclaimedDividend ?? 0,
-														keyPriceStroops
-													);
-													if (!estimate) {
-														showToast.error(
-															'Reinvest estimate unavailable. Please refresh prices and try again.'
-														);
-														return;
-													}
-													await reinvestMutation.mutateAsync({
-														keyId: creatorId,
-														amount: pos?.unclaimedDividend ?? 0,
-														keys: estimate.wholeKeys,
-													});
-													showToast.success(
-														`Reinvested ${formatDisplayKeyPrice(estimate.unclaimedStroops)} — received ${formatNumber(estimate.wholeKeys)} keys`
-													);
-												}}
-												onRedeem={async creatorId => {
-													const pos = heldKeyPositions.find(
-														p => p.creatorId === creatorId
-													);
+														onReinvest={async creatorId => {
+															const heldPosition = heldKeyPositions.find(
+																item => item.creatorId === creatorId
+															);
+															const estimate = estimateReinvest(
+																heldPosition?.unclaimedDividend ?? 0,
+																resolveCreatorKeyPriceStroops(heldPosition ?? {})
+															);
+															if (!estimate) {
+																showToast.error(
+																	'Reinvest estimate unavailable. Please refresh prices and try again.'
+																);
+																return;
+															}
+															await reinvestMutation.mutateAsync({
+																keyId: creatorId,
+																amount: heldPosition?.unclaimedDividend ?? 0,
+																keys: estimate.wholeKeys,
+															});
+													}}
+													onRedeem={async creatorId => {
 													await redeemMutation.mutateAsync({
-														creatorId,
-														quantity: pos?.quantity ?? 0,
+															creatorId,
+															quantity:
+																heldKeyPositions.find(item => item.creatorId === creatorId)?.quantity ?? 0,
 													});
-													showToast.success(
-														`Redeemed your ${creator?.title ?? 'deprecated'} key position`
-													);
 												}}
+														onFreeze={position => openSelfFreezeDialog('freeze', position)}
+														onUnfreeze={position => openSelfFreezeDialog('unfreeze', position)}
 												isSubmitting={tradeSubmitting}
 												isReinvesting={reinvestMutation.isPending}
 												isRedeeming={redeemMutation.isPending}
@@ -1641,6 +1651,22 @@ function LandingPage() {
 							</div>
 						)}
 					</MarketplaceSection>
+					<SelfFreezeDialog
+						open={selfFreezeDialog !== null}
+						action={selfFreezeDialog?.action ?? 'freeze'}
+						creatorName={
+							creators.find(item => item.id === selfFreezeDialog?.position.creatorId)?.title ??
+							'creator'
+						}
+						availableQuantity={
+							selfFreezeDialog?.action === 'unfreeze'
+								? selfFreezeDialog.position.frozenQuantity ?? 0
+								: selfFreezeDialog?.position.liquidQuantity ?? 0
+						}
+						isSubmitting={selfFreezeMutation.isPending}
+						onOpenChange={open => !open && setSelfFreezeDialog(null)}
+						onConfirm={handleConfirmSelfFreeze}
+					/>
 
 					<SectionDivider
 						title="Creator profile pattern"
@@ -1980,12 +2006,20 @@ function LandingPage() {
 					keyPriceStroops={resolveCreatorKeyPriceStroops(featuredCreator)}
 					protocolFeeBps={250}
 					creatorFeeBps={250}
+					createdAtLedger={featuredCreator?.createdAtLedger}
+					currentLedger={featuredCreator?.currentLedger}
+					launchPenaltyBps={featuredCreator?.launchPenaltyBps}
 					maxBuyQuantity={featuredCreator?.maxBuyQuantity ?? null}
 					isSubmitting={tradeSubmitting}
 					onOpenChange={setTradeDialogOpen}
 					onConfirm={handleConfirmTrade}
 				/>
 			</TradePanelErrorBoundary>
+			<TradeShortcutHints open={tradeDialogOpen} side={tradeSide} />
+			<KeyboardShortcutsHelp
+				open={shortcutsHelpOpen}
+				onOpenChange={setShortcutsHelpOpen}
+			/>
 			<ScrollToTop />
 			<IdleRefreshPrompt
 				visible={isIdlePromptVisible}

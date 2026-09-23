@@ -1,5 +1,5 @@
 /**
- * Unit tests for slippage tolerance utilities (#872).
+ * Unit tests for slippage tolerance utilities (#872, #877).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -37,11 +37,15 @@ describe('slippageTolerance.utils', () => {
 		});
 
 		it('rejects negative values', () => {
-			expect(validateSlippageTolerancePercent(-1)).toMatch(/cannot be negative/i);
+			expect(validateSlippageTolerancePercent(-1)).toMatch(
+				/cannot be negative/i
+			);
 		});
 
 		it('rejects values above 50', () => {
-			expect(validateSlippageTolerancePercent(50.1)).toMatch(/cannot exceed 50%/i);
+			expect(validateSlippageTolerancePercent(50.1)).toMatch(
+				/cannot exceed 50%/i
+			);
 		});
 
 		it('rejects null/undefined/NaN', () => {
@@ -120,8 +124,12 @@ describe('slippageTolerance.utils', () => {
 		});
 
 		it('propagates null bounds when the reference price is unavailable', () => {
-			expect(computeSlippageBounds('buy', null, 1).maxPriceStroops).toBeNull();
-			expect(computeSlippageBounds('sell', undefined, 1).minPriceStroops).toBeNull();
+			expect(
+				computeSlippageBounds('buy', null, 1).maxPriceStroops
+			).toBeNull();
+			expect(
+				computeSlippageBounds('sell', undefined, 1).minPriceStroops
+			).toBeNull();
 		});
 	});
 });
