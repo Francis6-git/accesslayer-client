@@ -1,7 +1,6 @@
 import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { useEffect, useState } from 'react';
 import { useCreatorDetail, usePriceHistory } from '@/hooks/useCreators';
-import { useCreatorDetail } from '@/hooks/useCreators';
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed';
 import { useCreatorProfileStaleIndicator } from '@/hooks/useCreatorProfileStaleIndicator';
 import CreatorBreadcrumb from '@/components/common/CreatorBreadcrumb';
