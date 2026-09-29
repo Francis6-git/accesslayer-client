@@ -651,7 +651,7 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 				disabledReason={
 					isPaused
 						? 'Trading is currently suspended because the contract is paused.'
-					isKeyDeprecated(creator)
+						: isKeyDeprecated(creator)
 						? 'This key has been deprecated and can no longer be bought.'
 						: isNetworkMismatch
 							? `Switch to ${expectedChainName} to enable purchases.`

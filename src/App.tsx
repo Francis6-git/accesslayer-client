@@ -1,32 +1,20 @@
+import Lenis from 'lenis';
 import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { createBrowserRouter, RouterProvider } from 'react-router';
-import MarketingPage from './pages/MarketingPage';
-import LandingPage from './pages/LandingPage';
-import NotFoundPage from './pages/NotFoundPage';
+import AppErrorBoundary from './components/common/AppErrorBoundary';
 import ContractPausedBanner from './components/common/ContractPausedBanner';
+import OfflineBanner from './components/common/OfflineBanner';
+import SessionExpiryWatcher from './components/common/SessionExpiryWatcher';
 import { useContractPausedStore } from './hooks/useContractPausedStore';
+import { routes } from './routes';
+import { useRouteChangeLogging } from './hooks/useRouteChangeLogging';
 
-const router = createBrowserRouter([
-	{
-		path: '/',
-		element: <MarketingPage />,
-	},
-	{
-		path: '/app',
-		element: <LandingPage />,
-	},
-	{
-		path: '/marketplace',
-		element: <LandingPage />,
-	},
-	{
-		path: '*',
-		element: <NotFoundPage />,
-	},
-]);
+const router = createBrowserRouter(routes);
 
 function App() {
+	useRouteChangeLogging();
+
 	// Start polling contract pause state on app load (#953)
 	useEffect(() => {
 		const store = useContractPausedStore.getState();
@@ -35,25 +23,6 @@ function App() {
 			store.stopPolling();
 		};
 	}, []);
-
-	return (
-		<>
-			{/* Full-width banner when contract emergency pause is active (#953) */}
-			<ContractPausedBanner />
-import Lenis from 'lenis';
-import { useEffect } from 'react';
-import { Toaster } from 'react-hot-toast';
-import { createBrowserRouter, RouterProvider } from 'react-router';
-import AppErrorBoundary from './components/common/AppErrorBoundary';
-import OfflineBanner from './components/common/OfflineBanner';
-import SessionExpiryWatcher from './components/common/SessionExpiryWatcher';
-import { routes } from './routes';
-import { useRouteChangeLogging } from './hooks/useRouteChangeLogging';
-
-const router = createBrowserRouter(routes);
-
-function App() {
-	useRouteChangeLogging();
 
 	useEffect(() => {
 		const lenis = new Lenis({
@@ -70,6 +39,8 @@ function App() {
 
 	return (
 		<AppErrorBoundary>
+			{/* Full-width banner when contract emergency pause is active (#953) */}
+			<ContractPausedBanner />
 			<OfflineBanner />
 			<Toaster
 				toastOptions={{

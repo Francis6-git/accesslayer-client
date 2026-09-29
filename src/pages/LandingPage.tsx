@@ -46,6 +46,7 @@ import TradePanelErrorBoundary from '@/components/common/TradePanelErrorBoundary
 import NetworkMismatchBanner from '@/components/common/NetworkMismatchBanner';
 import StellarConnectionQualityBadge from '@/components/common/StellarConnectionQualityBadge';
 import AdminPauseControl from '@/components/common/AdminPauseControl';
+import ContractPausedBanner from '@/components/common/ContractPausedBanner';
 import {
 	useContractPausedStore,
 	selectIsPaused,
@@ -843,23 +844,11 @@ function LandingPage() {
 
 	const isPaused = useContractPausedStore(selectIsPaused);
 
-	const openTradeDialog = (side: TradeSide) => {
-		if (isPaused) {
-			showToast.error('Trading is suspended: contract is paused');
-			return;
-		}
 	const openTradeDialog = useCallback((side: TradeSide) => {
 		setTradeSide(side);
 		setTradeDialogOpen(true);
 	}, []);
 
-	const handleConfirmTrade = async (amount: number) => {
-		if (isPaused) {
-			showToast.error('Trading is suspended: contract is paused');
-			return;
-		}
-		const previousHoldings = featuredHoldings;
-		setTradeSubmitting(true);
 	const handleConfirmTradeViaShortcut = useCallback(() => {
 		const confirmButton = document.querySelector(
 			'[data-testid="trade-dialog-confirm"]'
@@ -888,6 +877,7 @@ function LandingPage() {
 							: 'transfer';
 			showToast.loading(
 				`Submitting ${actionVerb} for ${amount} key${amount === 1 ? '' : 's'}...`
+			);
 			await selfFreezeMutation.mutateAsync({
 				creatorId: position.creatorId,
 				amount,
@@ -2084,16 +2074,6 @@ function LandingPage() {
 				</main>
 			</div>
 
-			<TradeDialog
-				open={tradeDialogOpen}
-				side={tradeSide}
-				creatorName="Alex Rivers"
-				creatorId={featuredCreator?.id ?? 'alex-rivers'}
-				availableHoldings={featuredHoldings}
-				keyPriceStroops={resolveCreatorKeyPriceStroops(featuredCreator)}
-				isSubmitting={tradeSubmitting}
-				onOpenChange={setTradeDialogOpen}
-				onConfirm={handleConfirmTrade}
 			<TradePanelErrorBoundary>
 				<TradeDialog
 					open={tradeDialogOpen}
