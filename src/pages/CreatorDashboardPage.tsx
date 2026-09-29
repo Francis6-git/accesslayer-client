@@ -15,8 +15,12 @@ import {
 	useSetMaxBuyQuantityMutation,
 	useSetQuorumBpsMutation,
 } from '@/hooks/useCreatorContractActions';
-import { formatDisplayKeyPrice, resolveCreatorKeyPriceStroops } from '@/utils/keyPriceDisplay.utils';
+import {
+	formatDisplayKeyPrice,
+	resolveCreatorKeyPriceStroops,
+} from '@/utils/keyPriceDisplay.utils';
 import { formatNumber } from '@/utils/numberFormat.utils';
+import { useUpdateCreatorProfile } from '@/hooks/useUpdateCreatorProfile';
 
 const TABS = [
 	{ label: 'Overview', value: 'overview' },
@@ -44,6 +48,7 @@ export default function CreatorDashboardPage() {
 	const setLaunchPenalty = useSetLaunchPenaltyMutation(id);
 	const setMaxBuyQuantity = useSetMaxBuyQuantityMutation(id);
 	const setQuorumBps = useSetQuorumBpsMutation(id);
+	const updateCreatorProfile = useUpdateCreatorProfile();
 
 	const setTab = (value: string) => {
 		setSearchParams(
@@ -70,9 +75,15 @@ export default function CreatorDashboardPage() {
 		return (
 			<main className="min-h-screen bg-[#06111f] px-6 py-16 text-white md:px-12">
 				<div className="mx-auto max-w-5xl">
-					<h1 className="font-grotesque text-3xl font-black">Creator dashboard</h1>
-					<p className="mt-4 text-white/60" data-testid="creator-dashboard-error">
-						We couldn&apos;t load this creator&apos;s dashboard. Try again shortly.
+					<h1 className="font-grotesque text-3xl font-black">
+						Creator dashboard
+					</h1>
+					<p
+						className="mt-4 text-white/60"
+						data-testid="creator-dashboard-error"
+					>
+						We couldn&apos;t load this creator&apos;s dashboard. Try again
+						shortly.
 					</p>
 				</div>
 			</main>
@@ -91,7 +102,11 @@ export default function CreatorDashboardPage() {
 					</p>
 				</div>
 
-				<ProfileTabPillGroup tabs={TABS} activeTab={activeTab} onTabChange={setTab} />
+				<ProfileTabPillGroup
+					tabs={TABS}
+					activeTab={activeTab}
+					onTabChange={setTab}
+				/>
 
 				{activeTab === 'overview' && (
 					<section
@@ -110,7 +125,9 @@ export default function CreatorDashboardPage() {
 									Current price
 								</dt>
 								<dd className="mt-1 font-jakarta font-bold">
-									{formatDisplayKeyPrice(resolveCreatorKeyPriceStroops(creator))}
+									{formatDisplayKeyPrice(
+										resolveCreatorKeyPriceStroops(creator)
+									)}
 								</dd>
 							</div>
 							<div>
@@ -125,7 +142,9 @@ export default function CreatorDashboardPage() {
 								<dt className="text-[0.65rem] font-bold uppercase tracking-[0.22em] text-white/40">
 									Category
 								</dt>
-								<dd className="mt-1 font-jakarta font-bold">{creator.category}</dd>
+								<dd className="mt-1 font-jakarta font-bold">
+									{creator.category}
+								</dd>
 							</div>
 						</dl>
 					</section>
@@ -139,61 +158,132 @@ export default function CreatorDashboardPage() {
 						aria-labelledby="profile-tab-settings"
 						data-testid="dashboard-settings-panel"
 					>
-						<section className={CARD_CLASS} data-testid="edit-profile-section">
+						<section
+							className={CARD_CLASS}
+							data-testid="edit-profile-section"
+						>
 							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
 								Edit Profile
 							</h2>
 							<p className="mb-6 text-sm text-white/50">
-								Update the display name, bio and avatar stored with your key.
+								Update the display name, bio and avatar stored with your
+								key.
 							</p>
 							<CreatorMetadataForm
 								initialName={creator.name ?? creator.title ?? ''}
 								initialBio={creator.bio ?? creator.description ?? ''}
-								initialAvatarUri={creator.avatarUri ?? creator.thumbnail ?? ''}
+								initialAvatarUri={
+									creator.avatarUri ?? creator.thumbnail ?? ''
+								}
 								isSubmitting={metadataMutation.isPending}
 								onSubmit={change => metadataMutation.mutate(change)}
 							/>
 						</section>
 
-						<section className={CARD_CLASS} data-testid="auction-setup-section">
+						<section
+							className={CARD_CLASS}
+							data-testid="early-access-section"
+						>
+							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
+								Early access
+							</h2>
+							<p className="mb-5 text-sm text-white/50">
+								Limit purchases to whitelisted wallets until public
+								launch.
+							</p>
+							<label className="flex max-w-md items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-3">
+								<span>
+									<span className="block text-sm font-semibold text-white">
+										Enable early access
+									</span>
+									<span className="mt-1 block text-xs text-white/50">
+										{creator.earlyAccessEnabled
+											? 'Only whitelisted wallets can buy during early access.'
+											: 'All connected wallets can buy this key.'}
+									</span>
+								</span>
+								<input
+									type="checkbox"
+									checked={creator.earlyAccessEnabled ?? false}
+									disabled={updateCreatorProfile.isPending}
+									aria-label="Enable early access"
+									className="size-5 shrink-0 accent-amber-400"
+									onChange={event =>
+										updateCreatorProfile.mutate({
+											creatorId: id,
+											data: {
+												earlyAccessEnabled:
+													event.currentTarget.checked,
+											},
+										})
+									}
+								/>
+							</label>
+							{creator.publicLaunchDate && (
+								<p className="mt-4 text-xs text-white/55">
+									Public launch:{' '}
+									<time dateTime={creator.publicLaunchDate}>
+										{new Date(
+											creator.publicLaunchDate
+										).toLocaleString()}
+									</time>
+								</p>
+							)}
+						</section>
+
+						<section
+							className={CARD_CLASS}
+							data-testid="auction-setup-section"
+						>
 							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
 								Auction Setup
 							</h2>
 							<p className="mb-6 text-sm text-white/50">
-								Set a fixed auction price and supply allocation before your key
-								goes live.
+								Set a fixed auction price and supply allocation before
+								your key goes live.
 							</p>
 							<AuctionSetupPanel
 								auctionPrice={creator.auctionPrice}
 								auctionSupply={creator.auctionSupply}
 								auctionSold={creator.auctionSold}
-								isSubmitting={configureAuction.isPending || cancelAuction.isPending}
+								isSubmitting={
+									configureAuction.isPending || cancelAuction.isPending
+								}
 								onConfigure={input => configureAuction.mutate(input)}
 								onCancel={() => cancelAuction.mutate()}
 							/>
 						</section>
 
-						<section className={CARD_CLASS} data-testid="launch-penalty-section">
+						<section
+							className={CARD_CLASS}
+							data-testid="launch-penalty-section"
+						>
 							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
 								Launch Penalty
 							</h2>
 							<p className="mb-6 text-sm text-white/50">
-								Charge early sellers a percentage fee during the first 7 days
-								after key creation.
+								Charge early sellers a percentage fee during the first 7
+								days after key creation.
 							</p>
 							<LaunchPenaltyPanel
 								launchPenaltyBps={creator.launchPenaltyBps}
 								isSubmitting={setLaunchPenalty.isPending}
-								onSubmit={penaltyBps => setLaunchPenalty.mutate(penaltyBps)}
+								onSubmit={penaltyBps =>
+									setLaunchPenalty.mutate(penaltyBps)
+								}
 							/>
 						</section>
 
-						<section className={CARD_CLASS} data-testid="max-buy-quantity-section">
+						<section
+							className={CARD_CLASS}
+							data-testid="max-buy-quantity-section"
+						>
 							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
 								Max Buy Per Transaction
 							</h2>
 							<p className="mb-6 text-sm text-white/50">
-								Limit how many keys a wallet can buy in a single transaction.
+								Limit how many keys a wallet can buy in a single
+								transaction.
 							</p>
 							<MaxBuyQuantityPanel
 								maxBuyQuantity={creator.maxBuyQuantity}
@@ -212,13 +302,16 @@ export default function CreatorDashboardPage() {
 						aria-labelledby="profile-tab-governance"
 						data-testid="dashboard-governance-panel"
 					>
-						<section className={CARD_CLASS} data-testid="quorum-settings-section">
+						<section
+							className={CARD_CLASS}
+							data-testid="quorum-settings-section"
+						>
 							<h2 className="mb-1 font-grotesque text-xl font-black tracking-tight">
 								Quorum Settings
 							</h2>
 							<p className="mb-6 text-sm text-white/50">
-								Set the minimum percentage of holders that must participate
-								in a vote for a proposal to pass.
+								Set the minimum percentage of holders that must
+								participate in a vote for a proposal to pass.
 							</p>
 							<QuorumSettingsPanel
 								quorumBps={creator.quorumBps}

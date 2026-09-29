@@ -86,6 +86,12 @@ export interface Course {
 	deprecated?: boolean;
 	/** Optional human-readable reason surfaced in the deprecation notice. */
 	deprecationReason?: string | null;
+	/** Whether purchases are restricted to the early-access whitelist. */
+	earlyAccessEnabled?: boolean;
+	/** Wallet addresses allowed to buy while early access is active. */
+	earlyAccessWhitelist?: string[];
+	/** ISO timestamp for when public purchases begin. */
+	publicLaunchDate?: string | null;
 }
 
 export type CourseSortOption =
@@ -364,10 +370,9 @@ class CourseService extends BaseApiService {
 		quantity: number
 	): Promise<Record<string, number>> {
 		try {
-			const response = await this.api.get<APIResponse<Record<string, number>>>(
-				`/keys/${keyId}/simulate`,
-				{ params: { quantity } }
-			);
+			const response = await this.api.get<
+				APIResponse<Record<string, number>>
+			>(`/keys/${keyId}/simulate`, { params: { quantity } });
 			return response.data.data;
 		} catch (error) {
 			throw this.handleError(error);

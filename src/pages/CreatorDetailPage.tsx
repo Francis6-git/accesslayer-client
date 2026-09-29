@@ -35,6 +35,10 @@ import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { useKeyTwap } from '@/hooks/useKeyTwap';
 import Skeleton from '@/components/ui/skeleton';
 import { Tooltip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
+import TradeDialog from '@/components/common/TradeDialog';
+import { useTradeMutation } from '@/hooks/useWallet';
+import { useAccount } from 'wagmi';
 
 function CreatorDetailPageContent() {
 	usePurchaseConfetti();
@@ -79,7 +83,8 @@ function CreatorDetailPageContent() {
 
 	// User holdings for Share to X button
 	const profile = useProfileStore(state => state.profile);
-	const userAddress = profile?.id;
+	const { address: connectedWalletAddress } = useAccount();
+	const userAddress = connectedWalletAddress ?? profile?.id;
 	const { data: holdings = [] } = useWalletHoldings(userAddress ?? '');
 	const userPosition = holdings.find(h => h.creatorId === (id || ''));
 	const holdingsCount = userPosition?.quantity ?? 0;
@@ -89,6 +94,8 @@ function CreatorDetailPageContent() {
 	const nextBuyAllowedAt =
 		userPosition?.nextBuyAllowedAt ?? creator?.nextBuyAllowedAt ?? null;
 	const { data: twap, isLoading: isTwapLoading } = useKeyTwap(id || '');
+	const tradeMutation = useTradeMutation(connectedWalletAddress ?? '');
+	const [tradeDialogOpen, setTradeDialogOpen] = useState(false);
 
 	// Track stale data indicator
 	const { shouldShowBadge, handleRefetch } = useCreatorProfileStaleIndicator(
@@ -174,7 +181,8 @@ function CreatorDetailPageContent() {
 	}));
 	const spotPrice = resolveCreatorKeyPriceStroops(creator);
 	const twapPrice = twap?.priceStroops ?? null;
-	const twapDelta = twapPrice != null && spotPrice != null ? twapPrice - spotPrice : null;
+	const twapDelta =
+		twapPrice != null && spotPrice != null ? twapPrice - spotPrice : null;
 
 	const hasRealStakingData =
 		creator.stakingPoolBalance != null ||
@@ -194,6 +202,28 @@ function CreatorDetailPageContent() {
 					: 25,
 				recentFeeInflow: 62,
 			};
+	const publicLaunchTimestamp = creator.publicLaunchDate
+		? Date.parse(creator.publicLaunchDate)
+		: null;
+	const hasValidPublicLaunchDate =
+		publicLaunchTimestamp != null && Number.isFinite(publicLaunchTimestamp);
+	const isPublicLaunchPending =
+		hasValidPublicLaunchDate && publicLaunchTimestamp > Date.now();
+	const isEarlyAccessRestricted =
+		creator.earlyAccessEnabled === true &&
+		(!hasValidPublicLaunchDate || isPublicLaunchPending);
+	const isWhitelisted = Boolean(
+		connectedWalletAddress &&
+		creator.earlyAccessWhitelist?.some(
+			address =>
+				address.toLowerCase() === connectedWalletAddress.toLowerCase()
+		)
+	);
+	const buyDisabledReason = !connectedWalletAddress
+		? 'Connect your wallet to buy this key.'
+		: isEarlyAccessRestricted && !isWhitelisted
+			? 'This key is in early access. Your wallet is not on the whitelist.'
+			: undefined;
 
 	return (
 		<main className="min-h-screen bg-[#06111f] px-6 py-16 text-white md:px-12">
@@ -203,7 +233,6 @@ function CreatorDetailPageContent() {
 					parentHref="/"
 					currentLabel={`${creator.title} Profile`}
 				/>
-
 				<div className="flex items-start gap-3">
 					<div className="min-w-0 flex-1">
 						<CreatorProfileHeader
@@ -216,7 +245,10 @@ function CreatorDetailPageContent() {
 							priceStroops={resolveCreatorKeyPriceStroops(creator)}
 							showBackButton={hasMounted}
 							onBack={() => {
-								if (window.history.length > 1 && location.key !== 'default') {
+								if (
+									window.history.length > 1 &&
+									location.key !== 'default'
+								) {
 									navigate(-1);
 									return;
 								}
@@ -230,17 +262,89 @@ function CreatorDetailPageContent() {
 						className="mt-3 shrink-0"
 					/>
 				</div>
-
 				{/* 4 Stat Cards */}
 				<div data-testid="creator-stat-cards">
 					<CreatorProfileStatRow items={statItems} />
 				</div>
-
 				{/* Buy Cooldown Countdown (only meaningful for authenticated users) */}
 				{userAddress && (
 					<BuyCooldownCountdown nextBuyAllowedAt={nextBuyAllowedAt} />
 				)}
-
+				<section
+					className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/3 p-4 sm:flex-row sm:items-center sm:justify-between"
+					data-testid="creator-buy-section"
+				>
+					<div>
+						{creator.earlyAccessEnabled && (
+							<span
+								className="inline-flex items-center rounded-full border border-amber-300/30 bg-amber-300/10 px-2.5 py-1 text-xs font-bold text-amber-200"
+								data-testid="early-access-badge"
+							>
+								Early access
+							</span>
+						)}
+						{creator.publicLaunchDate && hasValidPublicLaunchDate && (
+							<p className="mt-2 text-sm text-white/70">
+								{isPublicLaunchPending
+									? 'Public launch: '
+									: 'Public trading is open. '}
+								{isPublicLaunchPending && (
+									<time dateTime={creator.publicLaunchDate}>
+										{new Date(
+											creator.publicLaunchDate
+										).toLocaleString()}
+									</time>
+								)}
+							</p>
+						)}
+					</div>
+					<Tooltip content={buyDisabledReason ?? ''}>
+						<span
+							className="inline-flex"
+							tabIndex={buyDisabledReason ? 0 : undefined}
+						>
+							<Button
+								type="button"
+								disabled={Boolean(buyDisabledReason)}
+								data-testid="creator-buy-button"
+								className="bg-amber-400 font-bold text-slate-950 hover:bg-amber-300"
+								onClick={() => setTradeDialogOpen(true)}
+							>
+								Buy key
+							</Button>
+						</span>
+					</Tooltip>
+				</section>
+				{buyDisabledReason && (
+					<p id="early-access-buy-reason" className="sr-only">
+						{buyDisabledReason}
+					</p>
+				)}
+				{connectedWalletAddress && (
+					<TradeDialog
+						open={tradeDialogOpen}
+						side="buy"
+						creatorName={creator.title}
+						availableHoldings={holdingsCount}
+						keyPriceStroops={resolveCreatorKeyPriceStroops(creator)}
+						currentSupply={creator.creatorShareSupply}
+						protocolFeeBps={creator.protocolFeeBps}
+						creatorFeeBps={creator.creatorFeeBps}
+						maxBuyQuantity={creator.maxBuyQuantity}
+						isSubmitting={tradeMutation.isPending}
+						onOpenChange={setTradeDialogOpen}
+						onConfirm={async (amount, _preview, slippage) => {
+							await tradeMutation.mutateAsync({
+								creatorId: creator.id,
+								amount,
+								priceStroops: resolveCreatorKeyPriceStroops(creator),
+								price: creator.price,
+								maxPriceStroops: slippage?.maxPriceStroops ?? null,
+							});
+							setTradeDialogOpen(false);
+						}}
+					/>
+				)}
 				{/* Share to X Button (only visible for authenticated holders) */}
 				<div className="flex justify-end">
 					<ShareTwitterButton
@@ -253,31 +357,66 @@ function CreatorDetailPageContent() {
 						userHoldingsCount={holdingsCount}
 					/>
 				</div>
-
 				{isTwapLoading ? (
-					<div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4" data-testid="twap-price">
-						<div aria-label="Loading 24 hour TWAP" role="status"><Skeleton className="h-3 w-24" /><Skeleton className="mt-2 h-6 w-32" /></div>
+					<div
+						className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4"
+						data-testid="twap-price"
+					>
+						<div aria-label="Loading 24 hour TWAP" role="status">
+							<Skeleton className="h-3 w-24" />
+							<Skeleton className="mt-2 h-6 w-32" />
+						</div>
 					</div>
 				) : twapPrice != null ? (
-					<div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4" data-testid="twap-price">
+					<div
+						className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4"
+						data-testid="twap-price"
+					>
 						<div className="flex items-center justify-between gap-4">
 							<div>
 								<div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/55">
-									<span className={twapDelta != null ? (twapDelta < 0 ? 'text-emerald-400' : 'text-rose-400') : ''}>TWAP (24h)</span>
+									<span
+										className={
+											twapDelta != null
+												? twapDelta < 0
+													? 'text-emerald-400'
+													: 'text-rose-400'
+												: ''
+										}
+									>
+										TWAP (24h)
+									</span>
 									<Tooltip content="Time-weighted average price over the past 24 hours. Less sensitive to short-term manipulation.">
-										<button type="button" aria-label="What is 24 hour TWAP?" className="text-white/50">ⓘ</button>
+										<button
+											type="button"
+											aria-label="What is 24 hour TWAP?"
+											className="text-white/50"
+										>
+											ⓘ
+										</button>
 									</Tooltip>
 								</div>
-								<div className="mt-1 text-xl font-bold text-white">{formatDisplayKeyPrice(twapPrice)}</div>
+								<div className="mt-1 text-xl font-bold text-white">
+									{formatDisplayKeyPrice(twapPrice)}
+								</div>
 							</div>
-							{twapDelta != null && <span className={twapDelta < 0 ? 'text-sm font-semibold text-emerald-400' : 'text-sm font-semibold text-rose-400'}>{twapDelta < 0 ? '▼' : '▲'} {formatDisplayKeyPrice(Math.abs(twapDelta))} vs spot</span>}
+							{twapDelta != null && (
+								<span
+									className={
+										twapDelta < 0
+											? 'text-sm font-semibold text-emerald-400'
+											: 'text-sm font-semibold text-rose-400'
+									}
+								>
+									{twapDelta < 0 ? '▼' : '▲'}{' '}
+									{formatDisplayKeyPrice(Math.abs(twapDelta))} vs spot
+								</span>
+							)}
 						</div>
 					</div>
 				) : null}
-
 				{/* Staking Rewards */}
 				<StakingRewardsSection {...stakingStats} isLoading={isLoading} />
-
 				{/* Price Chart */}
 				<div
 					className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8"
@@ -292,14 +431,12 @@ function CreatorDetailPageContent() {
 						height={300}
 					/>
 				</div>
-
 				{/* Buy Simulation Tool */}
 				<KeySimulationTool
 					currentSupply={creator.creatorShareSupply ?? 100}
 					protocolFeeBps={creator.protocolFeeBps}
 					creatorFeeBps={creator.creatorFeeBps}
 				/>
-
 				{/* Holder Concentration */}
 				<div
 					className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8"
@@ -313,7 +450,6 @@ function CreatorDetailPageContent() {
 						totalSupply={creator.creatorShareSupply}
 					/>
 				</div>
-
 				{/* Fee Structure */}
 				<div className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8">
 					<div className="flex items-center justify-between gap-4 mb-6">
@@ -328,15 +464,14 @@ function CreatorDetailPageContent() {
 					</div>
 					<CreatorProfileInfoGrid items={feeItems} />
 				</div>
-
-				{/* Co-Creator Section */}					<CoCreatorSection
-						courseId={creator.id}
-						coCreatorAddress={creator.coCreatorAddress}
-						coCreatorSplitBps={creator.coCreatorSplitBps}
-						totalPaidToCoCreator={creator.totalPaidToCoCreator}
-						totalPaidToCreator={creator.totalPaidToCreator}
-					/>
-
+				{/* Co-Creator Section */}{' '}
+				<CoCreatorSection
+					courseId={creator.id}
+					coCreatorAddress={creator.coCreatorAddress}
+					coCreatorSplitBps={creator.coCreatorSplitBps}
+					totalPaidToCoCreator={creator.totalPaidToCoCreator}
+					totalPaidToCreator={creator.totalPaidToCreator}
+				/>
 				{/* Activity Feed */}
 				<div className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8">
 					<h2 className="font-grotesque text-xl font-black tracking-tight text-white mb-6">
