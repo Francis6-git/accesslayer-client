@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useDebounce } from '@/hooks/useDebounce';
 import { useInfiniteScroll } from '@/hooks/useInfiniteScroll';
 import { LayoutGroup, motion } from 'framer-motion';
@@ -72,8 +73,23 @@ import {
 	calculatePnLSummary,
 	formatPnLDisplay,
 	formatPnLPercentage,
+	getPnLToneClassName,
+	resolveAveragePurchasePriceStroops,
 	type HeldKeyPosition,
 } from '@/utils/portfolioValue.utils';
+import TradeCooldownButton from '@/components/common/TradeCooldownButton';
+import type { ActiveTradeCooldown } from '@/utils/tradeCooldown.utils';
+import {
+	useTradeCooldownStatus,
+	invalidateTradeCooldownStatus,
+	resolveActiveTradeCooldown,
+} from '@/hooks/useTradeCooldownStatus';
+import {
+	averagePurchasePriceFromCostBasis,
+	resolveCostBasisWalletKey,
+	useKeyCostBasis,
+	type KeyCostBasisEntry,
+} from '@/hooks/useKeyCostBasis';
 import PrecisionModeToggle, {
 	type PrecisionMode,
 } from '@/components/common/PrecisionModeToggle';
@@ -81,6 +97,7 @@ import ScrollToTop from '@/components/common/ScrollToTop';
 import SectionErrorBoundary from '@/components/common/SectionErrorBoundary';
 import StaleDataWarning from '@/components/common/StaleDataWarning';
 import { useScrollPreservation } from '@/hooks/useScrollPreservation';
+import { useKeyConfig } from '@/hooks/useKeyConfig';
 import { useStaleData } from '@/hooks/useStaleData';
 import { useIdleRefreshPrompt } from '@/hooks/useIdleRefreshPrompt';
 import IdleRefreshPrompt from '@/components/common/IdleRefreshPrompt';
@@ -100,7 +117,7 @@ import { useNavigationTiming } from '@/hooks/useNavigationTiming';
 import { useDocumentTitle } from '@/hooks/useDocumentTitle';
 import { CREATOR_LIST_SORT_LAYOUT_TRANSITION } from '@/utils/creatorListSortTransition';
 import { creatorListKey } from '@/utils/creatorListKey.utils';
-import { Check, ChevronDown, Copy, RefreshCw, Share2 } from 'lucide-react';
+import { Check, ChevronDown, Copy, RefreshCw, ArrowLeftRight, Share2 } from 'lucide-react';
 import ClearedFiltersEmptyState from '@/components/common/ClearedFiltersEmptyState';
 import CreatorListPagination from '@/components/common/CreatorListPagination';
 import CreatorListGroupSeparator from '@/components/common/CreatorListGroupSeparator';
@@ -108,6 +125,8 @@ import MarketplaceSidebar from '@/components/common/MarketplaceSidebar';
 import { copyTextToClipboard } from '@/utils/clipboard.utils';
 import SelfFreezeDialog from '@/components/common/SelfFreezeDialog';
 import SharePortfolioModal from '@/components/common/SharePortfolioModal';
+import PortfolioPerformanceChart from '@/components/common/PortfolioPerformanceChart';
+import { usePortfolioHistory } from '@/hooks/usePortfolioHistory';
 
 const FEATURED_CREATOR_FACTS = [
 	{ label: 'Membership', value: 'Collectors Circle' },
@@ -221,6 +240,13 @@ const PAGE_SIZE = 6;
 const FETCH_RETRY_ACTION_LABEL = 'Try again';
 const DEMO_HELD_KEY_QUANTITIES = [0, 2, 1] as const;
 const DEMO_WALLET_ADDRESS = 'demo-wallet-address';
+
+/**
+ * Stable empty cost-basis map returned by the `useKeyCostBasis` selector for
+ * wallets with no recorded positions. A shared reference keeps the selector
+ * referentially stable so it does not re-render the holdings list.
+ */
+const EMPTY_COST_BASIS_ENTRIES: Record<string, KeyCostBasisEntry> = {};
 const FINAL_FETCH_ERROR_COPY =
 	'Unable to load live creators right now. Showing fallback creators.';
 const CREATOR_REFRESH_SHORTCUT_LABEL = 'Ctrl/Cmd + Alt + R';
@@ -702,6 +728,22 @@ function LandingPage() {
 	// fall back to the demo featured creator. This keeps the profile panel
 	// reactive to backend updates (supply, price, etc.).
 	const featuredCreator = creators.length > 0 ? creators[0] : DEMO_CREATORS[0];
+	// Live key config powers the bid-ask spread in the quick-trade modal
+	// (#951) and refetches as the key configuration changes.
+	const { data: featuredKeyConfig, isLoading: isFeaturedKeyConfigLoading } =
+		useKeyConfig(featuredCreator?.id);
+
+	// #998 — trade cooldown for the featured key: fetched on page load and
+	// refetched after each trade (see handleConfirmTrade), so the buy/sell
+	// buttons show a live countdown and stay disabled until it expires.
+	const { data: featuredCooldownStatus } = useTradeCooldownStatus(
+		featuredCreator?.id ?? ''
+	);
+	const featuredTradeCooldown: ActiveTradeCooldown | null =
+		resolveActiveTradeCooldown(
+			featuredCooldownStatus,
+			featuredCreator?.nextBuyAllowedAt ?? null
+		);
 
 	useEffect(() => {
 		if (pendingScrollRestoreRef.current == null) return;
@@ -779,6 +821,28 @@ function LandingPage() {
 	const redeemMutation = useRedeemDeprecatedKeyMutation(activeWalletAddress);
 	const { data: cachedHoldings = [] } = useWalletHoldings(activeWalletAddress);
 
+	// #1052 — the wallet's portfolio value over time, plotted by the performance
+	// chart in the holdings overview. The full series is fetched once and the
+	// chart slices it per range selector.
+	const {
+		data: portfolioHistory = [],
+		isLoading: isPortfolioHistoryLoading,
+		isError: isPortfolioHistoryError,
+		refetch: refetchPortfolioHistory,
+	} = usePortfolioHistory(activeWalletAddress);
+
+	// #935 — the wallet's persisted per-key cost basis, used as the average
+	// purchase price each position's unrealised P&L is measured against. The
+	// selector returns a stable reference (either the stored map or a shared
+	// empty object) so it never re-renders on unrelated store writes.
+	// Keyed on `activeWalletAddress` so demo trades — which the mutation records
+	// under the demo address — resolve to the same bucket the trades were
+	// written to.
+	const costBasisWalletKey = resolveCostBasisWalletKey(activeWalletAddress);
+	const costBasisByCreatorId = useKeyCostBasis(
+		state => state.entriesByWallet[costBasisWalletKey] ?? EMPTY_COST_BASIS_ENTRIES
+	);
+
 	// Merged: keep total-value sorting (feature/holdings-sorting-tests) while
 	// also zeroing out the demo baseline quantities once a real wallet is
 	// connected (dev), so a connected wallet only shows genuine cached
@@ -795,18 +859,39 @@ function LandingPage() {
 							? featuredHoldings
 							: (DEMO_HELD_KEY_QUANTITIES[index] ?? 0);
 					const baseQuantity = connectedAddress ? 0 : defaultBaseQuantity;
-					return {
+					const basePosition = {
 						creatorId: creator.id,
 						quantity: cached?.quantity ?? baseQuantity,
 						priceStroops: creator.priceStroops,
 						price: creator.price,
-										frozenQuantity: cached?.frozenQuantity ?? 0,
-										liquidQuantity:
-											cached?.liquidQuantity ?? cached?.quantity ?? baseQuantity,
+						// #935 — live supply so the current value can be valued on
+						// the bonding curve rather than a cached snapshot.
+						currentSupply: creator.creatorShareSupply,
+						frozenQuantity: cached?.frozenQuantity ?? 0,
+						liquidQuantity:
+							cached?.liquidQuantity ?? cached?.quantity ?? baseQuantity,
 						isPriceLoading: isPriceRefreshing,
 						isPriceStale: creatorsAreStale,
 						pending: cached?.pending ?? false,
 						unclaimedDividend: cached?.unclaimedDividend ?? 0,
+						// #935 — cost basis reported by the backend, which wins over
+						// the locally tracked basis when both are available.
+						averagePurchasePriceStroops:
+							cached?.averagePurchasePriceStroops ?? null,
+					};
+
+					return {
+						...basePosition,
+						// #935 — average purchase price: server-provided cost basis
+						// first, then the locally tracked basis, then seeded from the
+						// current curve price so a position synced without cost
+						// history starts at break-even instead of hiding its P&L.
+						averagePurchasePriceStroops: resolveAveragePurchasePriceStroops(
+							basePosition,
+							averagePurchasePriceFromCostBasis(
+								costBasisByCreatorId[creator.id]
+							)
+						),
 					};
 				})
 			),
@@ -817,6 +902,7 @@ function LandingPage() {
 			isPriceRefreshing,
 			cachedHoldings,
 			connectedAddress,
+			costBasisByCreatorId,
 		]
 	);
 	const portfolioValue = useMemo(
@@ -860,6 +946,14 @@ function LandingPage() {
 		}
 		const previousHoldings = featuredHoldings;
 		setTradeSubmitting(true);
+	const queryClient = useQueryClient();
+	const refreshTradeCooldown = useCallback(
+		(keyId: string) => {
+			if (keyId) invalidateTradeCooldownStatus(queryClient, keyId);
+		},
+		[queryClient]
+	);
+
 	const handleConfirmTradeViaShortcut = useCallback(() => {
 		const confirmButton = document.querySelector(
 			'[data-testid="trade-dialog-confirm"]'
@@ -979,6 +1073,9 @@ function LandingPage() {
 					price: featuredCreator?.price,
 					ref: urlRef,
 					maxPriceStroops: slippage?.maxPriceStroops ?? null,
+					// #935 — live supply so the buy's cost basis is recorded at the
+					// price the curve actually charges across the buy range.
+					currentSupply: featuredCreator?.creatorShareSupply ?? null,
 				});
 				setFeaturedHoldings(current => current + amount);
 				showToast.transactionSuccess(
@@ -995,6 +1092,10 @@ function LandingPage() {
 					priceStroops: resolveCreatorKeyPriceStroops(featuredCreator),
 					price: featuredCreator?.price,
 					minPriceStroops: slippage?.minPriceStroops ?? null,
+					// #935 — the sell releases the sold keys' share of the position's
+					// cost basis; the average purchase price of the remaining keys is
+					// preserved.
+					currentSupply: featuredCreator?.creatorShareSupply ?? null,
 				});
 				setFeaturedHoldings(current => Math.max(0, current - amount));
 				showToast.transactionSuccess(
@@ -1020,6 +1121,9 @@ function LandingPage() {
 				showToast.error(getSignatureErrorMessage(error));
 			}
 		} finally {
+			// #998 — after any settled trade, refetch the cooldown so the
+			// buy/sell buttons reflect the freshly committed cooldown window.
+			refreshTradeCooldown('1');
 			setTradeSubmitting(false);
 		}
 	};
@@ -1571,6 +1675,17 @@ function LandingPage() {
 									{displayedPortfolioValue.heldPositionCount}
 								</span>
 							</div>
+</div>
+						<div className="md:col-span-2 mt-4 flex justify-end">
+							<Button
+								variant="outline"
+								onClick={() => window.location.href = '/swap/create'}
+								disabled={heldKeyPositions.filter(p => p.quantity && p.quantity > 0).length === 0}
+								className="rounded-xl border-white/15 bg-white/5 text-white/80 hover:bg-white/10 hover:text-white"
+							>
+								<ArrowLeftRight className="size-4 mr-2" aria-hidden="true" />
+								Create Atomic Swap
+							</Button>
 						</div>
 						{pnlSummary.status === 'ready' &&
 							pnlSummary.totalInvested > 0 && (
@@ -1583,7 +1698,10 @@ function LandingPage() {
 											<span className="text-white/45">
 												Total Invested
 											</span>
-											<span className="ml-2 font-grotesque font-bold text-white">
+											<span
+												className="ml-2 font-grotesque font-bold text-white"
+												data-testid="pnl-summary-invested"
+											>
 												{formatPnLDisplay(pnlSummary.totalInvested)}
 											</span>
 										</div>
@@ -1591,7 +1709,10 @@ function LandingPage() {
 											<span className="text-white/45">
 												Current Value
 											</span>
-											<span className="ml-2 font-grotesque font-bold text-white">
+											<span
+												className="ml-2 font-grotesque font-bold text-white"
+												data-testid="pnl-summary-current-value"
+											>
 												{formatPnLDisplay(pnlSummary.currentValue)}
 											</span>
 										</div>
@@ -1600,15 +1721,12 @@ function LandingPage() {
 												Unrealised PnL
 											</span>
 											<span
-												className={`ml-2 font-grotesque font-bold ${
-													pnlSummary.unrealisedPnL > 0
-														? 'text-emerald-400'
-														: pnlSummary.unrealisedPnL < 0
-															? 'text-red-400'
-															: 'text-white'
-												}`}
+												className={`ml-2 font-grotesque font-bold ${getPnLToneClassName(
+													pnlSummary.unrealisedPnL
+												)}`}
+												data-testid="pnl-summary-unrealised"
 											>
-												{formatPnLDisplay(pnlSummary.unrealisedPnL)}{' '}
+												{formatPnLDisplay(pnlSummary.unrealisedPnL)}&nbsp;
 												(
 												{formatPnLPercentage(
 													pnlSummary.pnlPercentage
@@ -1617,17 +1735,43 @@ function LandingPage() {
 											</span>
 										</div>
 									</div>
-									<button
-										type="button"
-										data-testid="share-performance-btn"
-										onClick={() => setSharePortfolioOpen(true)}
-										className="inline-flex items-center gap-2 self-start rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white transition hover:border-white/30 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-amber-400/50 sm:self-auto cursor-pointer"
-									>
-										<Share2 className="size-3.5 text-amber-300" aria-hidden="true" />
-										<span>Share Performance</span>
-									</button>
+									<div className="flex flex-col gap-1 sm:items-end">
+										<button
+											type="button"
+											data-testid="share-performance-btn"
+											onClick={() => setSharePortfolioOpen(true)}
+											className="inline-flex items-center gap-2 self-start rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white transition hover:border-white/30 hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-amber-400/50 sm:self-auto cursor-pointer"
+										>
+											<Share2 className="size-3.5 text-amber-300" aria-hidden="true" />
+											<span>Share Performance</span>
+										</button>
+										<p
+											className="text-[0.65rem] leading-relaxed text-white/40 sm:text-right"
+											data-testid="pnl-summary-caption"
+										>
+											Valued at the current bonding curve sell price across&nbsp;
+											{pnlSummary.costBasisPositionCount}&nbsp;
+											{pnlSummary.costBasisPositionCount === 1
+												? 'position'
+												: 'positions'}&nbsp;
+											with a tracked average purchase price.
+										</p>
+									</div>
 								</div>
 							)}
+						<PortfolioPerformanceChart
+							data={portfolioHistory}
+							isLoading={isPortfolioHistoryLoading}
+							error={
+								isPortfolioHistoryError
+									? 'Unable to load portfolio history.'
+									: null
+							}
+							onRetry={() => {
+								void refetchPortfolioHistory();
+							}}
+							className="mt-6"
+						/>
 						{isLoading ? (
 							<CreatorHoldingsListSkeleton className="mt-6" />
 						) : heldKeyPositions.filter(
@@ -1646,13 +1790,20 @@ function LandingPage() {
 										const creator = creators.find(
 											item => item.id === position.creatorId
 										);
+										// #998 — per-position trade cooldown: the position's
+										// own nextBuyAllowedAt (refreshed with the holdings
+										// query after each trade) drives the countdown.
 										return (
-											<PortfolioHoldingRow
-												key={position.creatorId}
-												position={position}
-												creator={creator}
+										<PortfolioHoldingRow
+											key={position.creatorId}
+											position={position}
+											creator={creator}
+											tradeCooldown={resolveActiveTradeCooldown(
+												null,
+												position.nextBuyAllowedAt ?? null
+											)}
 												onBuy={() => openTradeDialog('buy')}
-												onSell={() => openTradeDialog('sell')}
+											onSell={() => openTradeDialog('sell')}
 														onReinvest={async creatorId => {
 															const heldPosition = heldKeyPositions.find(
 																item => item.creatorId === creatorId
@@ -1961,6 +2112,44 @@ function LandingPage() {
 												Transfer
 											</Button>
 										</div>
+									{isNetworkMismatch && <NetworkMismatchBanner />}										<div className="relative">
+											<div
+												className={cn(
+													'hidden md:flex items-center gap-3 transition-opacity duration-200',
+													tradeSubmitting &&
+														'pointer-events-none select-none opacity-60'
+												)}
+												aria-busy={tradeSubmitting || undefined}
+											>
+												{/* #998 — cooldown-aware trade actions: the label is
+												    replaced by a live countdown while the cooldown
+												    is active, with a tooltip explaining the policy. */}
+												<TradeCooldownButton
+													cooldown={featuredTradeCooldown}
+													label="Buy"
+													className="rounded-xl"
+													onClick={() => openTradeDialog('buy')}
+													buttonProps={{
+														disabled:
+															isNetworkMismatch || tradeSubmitting || undefined,
+														'aria-disabled':
+															isNetworkMismatch || tradeSubmitting || undefined,
+													}}
+												/>
+												<TradeCooldownButton
+													cooldown={featuredTradeCooldown}
+													label="Sell"
+													variant="outline"
+													className="rounded-xl"
+													onClick={() => openTradeDialog('sell')}
+													buttonProps={{
+														disabled:
+															isNetworkMismatch || tradeSubmitting || undefined,
+														'aria-disabled':
+															isNetworkMismatch || tradeSubmitting || undefined,
+													}}
+												/>
+											</div>
 										{tradeSubmitting && (
 											<div className="absolute inset-0 hidden items-center justify-center rounded-[1.25rem] border border-white/10 bg-slate-950/65 backdrop-blur-sm md:flex">
 												<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-xs font-bold text-white/85 shadow-lg">
@@ -2060,6 +2249,44 @@ function LandingPage() {
 											Transfer
 										</Button>
 									</div>
+							<div className="flex items-center gap-2">									<div className="relative">
+										<div
+											className={cn(
+												'flex items-center gap-2 transition-opacity duration-200',
+												tradeSubmitting &&
+													'pointer-events-none select-none opacity-60'
+											)}
+											aria-busy={tradeSubmitting || undefined}
+										>
+											{/* #998 — cooldown-aware mobile trade actions. */}
+											<TradeCooldownButton
+												cooldown={featuredTradeCooldown}
+												label="Buy"
+												size="sm"
+												className="rounded-xl"
+												onClick={() => openTradeDialog('buy')}
+												buttonProps={{
+													disabled:
+														isNetworkMismatch || tradeSubmitting || undefined,
+													'aria-disabled':
+														isNetworkMismatch || tradeSubmitting || undefined,
+												}}
+											/>
+											<TradeCooldownButton
+												cooldown={featuredTradeCooldown}
+												label="Sell"
+												size="sm"
+												variant="outline"
+												className="rounded-xl"
+												onClick={() => openTradeDialog('sell')}
+												buttonProps={{
+													disabled:
+														isNetworkMismatch || tradeSubmitting || undefined,
+													'aria-disabled':
+														isNetworkMismatch || tradeSubmitting || undefined,
+												}}
+											/>
+										</div>
 									{tradeSubmitting && (
 										<div className="absolute inset-0 flex items-center justify-center rounded-xl border border-white/10 bg-slate-950/65 px-3 backdrop-blur-sm">
 											<div className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 text-[11px] font-bold text-white/85 shadow-lg">
@@ -2107,6 +2334,9 @@ function LandingPage() {
 					currentLedger={featuredCreator?.currentLedger}
 					launchPenaltyBps={featuredCreator?.launchPenaltyBps}
 					maxBuyQuantity={featuredCreator?.maxBuyQuantity ?? null}
+					holdingCap={featuredCreator?.holdingCap ?? featuredCreator?.maxHoldingCap ?? null}
+					keyConfig={featuredKeyConfig}
+					isKeyConfigLoading={isFeaturedKeyConfigLoading}
 					isSubmitting={tradeSubmitting}
 					onOpenChange={setTradeDialogOpen}
 					onConfirm={handleConfirmTrade}
