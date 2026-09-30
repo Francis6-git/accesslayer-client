@@ -9,6 +9,10 @@ export default defineConfig({
 		environment: 'jsdom',
 		setupFiles: ['./src/test/setup.ts'],
 		exclude: [...configDefaults.exclude, '**/.kilo/**'],
+		pool: 'forks',
+		maxWorkers: 1,
+		minWorkers: 1,
+		fileParallelism: false,
 	},
 	resolve: {
 		alias: {
