@@ -60,6 +60,7 @@ import {
 	useRedeemDeprecatedKeyMutation,
 	type SelfFreezeAction,
 } from '@/hooks/useWallet';
+import toast from 'react-hot-toast';
 import showToast from '@/utils/toast.util';
 import { getSignatureErrorMessage } from '@/utils/errorHandling.utils';
 import { formatCompactNumber, formatNumber } from '@/utils/numberFormat.utils';
@@ -105,6 +106,13 @@ import ClearedFiltersEmptyState from '@/components/common/ClearedFiltersEmptySta
 import CreatorListPagination from '@/components/common/CreatorListPagination';
 import CreatorListGroupSeparator from '@/components/common/CreatorListGroupSeparator';
 import MarketplaceSidebar from '@/components/common/MarketplaceSidebar';
+import BatchBuyBasket from '@/components/common/BatchBuyBasket';
+import BatchBuyConfirmDialog from '@/components/common/BatchBuyConfirmDialog';
+import BatchBuyBasketTrigger from '@/components/common/BatchBuyBasketTrigger';
+import {
+	useBatchBuyStore,
+	selectItemCount,
+} from '@/hooks/useBatchBuyStore';
 import { copyTextToClipboard } from '@/utils/clipboard.utils';
 import SelfFreezeDialog from '@/components/common/SelfFreezeDialog';
 import SharePortfolioModal from '@/components/common/SharePortfolioModal';
@@ -288,6 +296,55 @@ function LandingPage() {
 	} | null>(null);
 	const [stellarAddressCopied, setStellarAddressCopied] = useState(false);
 	const prefersReducedMotion = usePrefersReducedMotion();
+
+	// ── Batch buy basket (#954) ───────────────────────────────────────────
+	const [batchBasketOpen, setBatchBasketOpen] = useState(false);
+	const [batchConfirmOpen, setBatchConfirmOpen] = useState(false);
+	const [batchSubmitting, setBatchSubmitting] = useState(false);
+	const batchItemCount = useBatchBuyStore(selectItemCount);
+	const clearBasket = useBatchBuyStore(s => s.clearBasket);
+	const batchItems = useBatchBuyStore(s => s.items);
+
+	const handleBatchCheckout = () => {
+		setBatchBasketOpen(false);
+		setBatchConfirmOpen(true);
+	};
+
+	const handleBatchConfirm = async () => {
+		setBatchSubmitting(true);
+		try {
+			showToast.loading(
+				`Submitting batch purchase of ${batchItemCount} creator key${batchItemCount !== 1 ? 's' : ''}...`
+			);
+			// Simulated batch transaction — mirrors the existing stub pattern.
+			await new Promise<void>(resolve =>
+				window.setTimeout(resolve, 1800)
+			);
+			toast.remove();
+			const fakeTxHash =
+				'0xbatch' +
+				Math.random().toString(16).slice(2, 14).padEnd(12, '0') +
+				'deadbeef';
+			const creatorNames = batchItems
+				.map(i => i.creatorName)
+				.slice(0, 3)
+				.join(', ');
+			const extraCount = batchItems.length > 3 ? ` +${batchItems.length - 3} more` : '';
+			showToast.transactionSuccess(
+				'Batch purchase confirmed!',
+				`Purchased keys for ${creatorNames}${extraCount}.`,
+				fakeTxHash,
+				`https://stellar.expert/explorer/testnet/tx/${fakeTxHash}`
+			);
+			clearBasket();
+			setBatchConfirmOpen(false);
+		} catch {
+			toast.remove();
+			showToast.error('Batch purchase failed. Please try again.');
+		} finally {
+			setBatchSubmitting(false);
+		}
+	};
 	const [sortOption, setSortOption] = useState<CourseSortOption>(() => {
 		const sort = searchParams.get('sort') as CourseSortOption | null;
 		if (
@@ -2106,6 +2163,25 @@ function LandingPage() {
 				heldPositions={heldKeyPositions}
 				creators={holdingsCreators.length > 0 ? holdingsCreators : creators}
 			/>
+
+			{/* Batch buy basket (#954) */}
+			<BatchBuyBasketTrigger
+				onClick={() => setBatchBasketOpen(true)}
+			/>
+			<BatchBuyBasket
+				open={batchBasketOpen}
+				onClose={() => setBatchBasketOpen(false)}
+				onCheckout={handleBatchCheckout}
+			/>
+			<BatchBuyConfirmDialog
+				open={batchConfirmOpen}
+				onOpenChange={open => {
+					if (!batchSubmitting) setBatchConfirmOpen(open);
+				}}
+				onConfirm={handleBatchConfirm}
+				isSubmitting={batchSubmitting}
+			/>
+
 			<ScrollToTop />
 			<IdleRefreshPrompt
 				visible={isIdlePromptVisible}
