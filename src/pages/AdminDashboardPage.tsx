@@ -3,6 +3,7 @@ import TimelockQueuePanel from '@/components/admin/TimelockQueuePanel';
 import OracleAccessPanel from '@/components/admin/OracleAccessPanel';
 import AclWhitelistPanel from '@/components/admin/AclWhitelistPanel';
 import UpgradeProxyPanel from '@/components/admin/UpgradeProxyPanel';
+import TreasuryPanel from '@/components/admin/TreasuryPanel';
 import { useNavigationTiming } from '@/hooks/useNavigationTiming';
 import { useStellarWallet } from '@/hooks/useStellarWallet';
 import { isAdminWallet } from '@/utils/adminAccess';
@@ -31,6 +32,7 @@ export default function AdminDashboardPage() {
 
 				{isAdmin && (
 					<>
+						<TreasuryPanel adminAddress={address ?? ''} />
 						<AclWhitelistPanel />
 						<OracleAccessPanel />
 						<TimelockQueuePanel isAdmin={isAdmin} />
