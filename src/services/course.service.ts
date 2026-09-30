@@ -132,6 +132,8 @@ export interface Course {
 	whitelistEnabled?: boolean;
 	/** Approved wallet addresses on the early-access whitelist (#1031). */
 	whitelist?: WhitelistEntry[];
+	/** Migration details shown when a deprecated key has a successor. */
+	deprecation?: KeyDeprecation | null;
 
 	/** Whether purchases are restricted to the early-access whitelist. */
 	earlyAccessEnabled?: boolean;
@@ -139,6 +141,17 @@ export interface Course {
 	earlyAccessWhitelist?: string[];
 	/** ISO timestamp for when public purchases begin. */
 	publicLaunchDate?: string | null;
+}
+
+export interface KeyDeprecation {
+	/** ISO 8601 date the key was (or will be) deprecated. */
+	deprecatedAt: string;
+	/** Human-readable reason for deprecation. */
+	reason: string;
+	/** Successor creator ID, when one has been designated. */
+	successorId?: string;
+	/** Display name of the successor key. */
+	successorName?: string;
 }
 
 export interface WhitelistEntry {
