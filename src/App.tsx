@@ -2,6 +2,7 @@ import Lenis from 'lenis';
 import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { createBrowserRouter, RouterProvider } from 'react-router';
+
 import AppErrorBoundary from './components/common/AppErrorBoundary';
 import OfflineBanner from './components/common/OfflineBanner';
 import SessionExpiryWatcher from './components/common/SessionExpiryWatcher';
