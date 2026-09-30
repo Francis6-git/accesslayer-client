@@ -225,13 +225,17 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 		}
 	};
 
-	const handleBuy = () => {
+	const handleBuy = useCallback(() => {
 		if (isPaused) {
 			toast.error('Trading is suspended: contract is paused');
 			return;
 		}
 
-	const handleBuy = useCallback(() => {
+		if (isKeyDeprecated(creator)) {
+			toast.error('This key has been deprecated and can no longer be bought');
+			return;
+		}
+
 		if (!isConnected) {
 			toast.error('Please connect your wallet to purchase keys', {
 				duration: 4000,
@@ -252,6 +256,8 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 		// Implementation for contract interaction would go here
 		runPurchaseAttempt();
 	}, [
+		isPaused,
+		creator,
 		isConnected,
 		isNetworkMismatch,
 		expectedChainName,

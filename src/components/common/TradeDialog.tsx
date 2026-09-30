@@ -57,10 +57,10 @@ import {
 	type ContractDynamicFeeRate,
 	type DynamicFeeBreakdown as DynamicFeeBreakdownData,
 } from '@/utils/dynamicFeeRate.utils';
-import { courseService } from '@/services/course.service';
-import PriceImpactWarning from '@/components/common/PriceImpactWarning';
-import PriceImpactOverrideCheckbox from '@/components/common/PriceImpactOverrideCheckbox';
-import TradeConfirmationModal from '@/components/common/TradeConfirmationModal';
+import { courseService, type KeyConfig } from '@/services/course.service';
+import SpreadIndicator from '@/components/common/SpreadIndicator';
+import CircuitBreakerStatusIndicator from '@/components/common/CircuitBreakerStatusIndicator';
+import { evaluateCircuitBreakerStatus } from '@/utils/circuitBreaker.utils';
 import {
 	calculateTradePriceImpact,
 	PRICE_IMPACT_THRESHOLD_PERCENT,
@@ -127,6 +127,14 @@ export interface TradeDialogProps {
 	launchPenaltyBps?: number | null;
 	/** Max buy quantity allowed per transaction; null means no limit. */
 	maxBuyQuantity?: number | null;
+	/** Live key trading config carrying the bid-ask spread (#951). */
+	keyConfig?: KeyConfig | null;
+	/** Whether the key config query is still loading. */
+	isKeyConfigLoading?: boolean;
+	/** Key-level circuit breaker threshold in percent (defaults to keyConfig or 15%) (#1034). */
+	circuitBreakerThresholdPercent?: number | null;
+	/** Key-level circuit breaker threshold in basis points (defaults to keyConfig or 1500) (#1034). */
+	circuitBreakerThresholdBps?: number | null;
 	/** Whether to display the confirmation modal step before submission (#919). Defaults to false. */
 	requireConfirmation?: boolean;
 	/** Optional XLM/USD spot rate for the confirmation fee USD equivalent (#994). */
@@ -161,6 +169,10 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 	currentLedger,
 	launchPenaltyBps,
 	maxBuyQuantity = null,
+	keyConfig,
+	isKeyConfigLoading = false,
+	circuitBreakerThresholdPercent,
+	circuitBreakerThresholdBps,
 	requireConfirmation = false,
 	xlmUsdRate = null,
 	onOpenChange,
@@ -344,6 +356,39 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 	const amountValid = validationError === null;
 	const showError = touched && validationError !== null;
 
+	const priceImpactPercent = useMemo(() => {
+		if (!amountValid || !Number.isFinite(parsedAmount) || (side !== 'buy' && side !== 'sell')) return 0;
+		return calculateTradePriceImpact({ side, quantity: parsedAmount, currentSupply: currentSupply ?? 0 });
+	}, [amountValid, parsedAmount, side, currentSupply]);
+
+	const effectiveCircuitBreakerThresholdPercent =
+		circuitBreakerThresholdPercent ??
+		keyConfig?.circuitBreakerThresholdPercent ??
+		null;
+	const effectiveCircuitBreakerThresholdBps =
+		circuitBreakerThresholdBps ??
+		keyConfig?.circuitBreakerThresholdBps ??
+		null;
+
+	const circuitBreakerStatus = useMemo(() => {
+		if (side !== 'buy' || !amountValid) return null;
+		return evaluateCircuitBreakerStatus({
+			impactPercent: priceImpactPercent,
+			thresholdPercent: effectiveCircuitBreakerThresholdPercent,
+			thresholdBps: effectiveCircuitBreakerThresholdBps,
+		});
+	}, [
+		side,
+		amountValid,
+		priceImpactPercent,
+		effectiveCircuitBreakerThresholdPercent,
+		effectiveCircuitBreakerThresholdBps,
+	]);
+
+	const isCircuitBreakerBreached = Boolean(
+		side === 'buy' && circuitBreakerStatus?.isBreached
+	);
+
 	const isAllowanceChecking = side === 'stake' && allowanceStatus === 'checking';
 	const requiresAllowanceApproval = side === 'stake' && needsApproval;
 	const confirmDisabled =
@@ -351,6 +396,7 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 		isSubmitting ||
 		isApproving ||
 		isAllowanceChecking ||
+		isCircuitBreakerBreached ||
 		atCap ||
 		isPaused ||
 		requiresAllowanceApproval;
@@ -365,11 +411,20 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 
 	const confirmLabel =
 		side === 'buy'
-			? atCap ? 'Cap reached' : isPaused ? 'Contract paused' : 'Confirm buy'
-			: isPaused ? 'Contract paused'
-			: side === 'sell' ? 'Confirm sell'
-			: side === 'stake' ? 'Confirm stake'
-			: 'Confirm transfer';
+			? isCircuitBreakerBreached
+				? 'Circuit Breaker Tripped'
+				: atCap
+					? 'Cap reached'
+					: isPaused
+						? 'Contract paused'
+						: 'Confirm buy'
+			: isPaused
+				? 'Contract paused'
+				: side === 'sell'
+					? 'Confirm sell'
+					: side === 'stake'
+						? 'Confirm stake'
+						: 'Confirm transfer';
 
 	const estimatedNetworkFee = formatTransactionFeeDisplay(
 		networkFeeEstimate.status === 'success'
@@ -425,14 +480,9 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 	}, [side, pricePreview, estimatedTotalStroops, estimatedProceedsStroops]);
 
 	const slippageBounds = useMemo<SlippageBounds | null>(() => {
-		if (slippageReferencePriceStroops == null) return null;
+		if (slippageReferencePriceStroops == null || (side !== 'buy' && side !== 'sell')) return null;
 		return computeSlippageBounds(side, slippageReferencePriceStroops, slippageTolerancePercent);
 	}, [side, slippageReferencePriceStroops, slippageTolerancePercent]);
-
-	const priceImpactPercent = useMemo(() => {
-		if (!amountValid || !Number.isFinite(parsedAmount)) return 0;
-		return calculateTradePriceImpact({ side, quantity: parsedAmount, currentSupply: currentSupply ?? 0 });
-	}, [amountValid, parsedAmount, side, currentSupply]);
 
 	const handleMaxClick = () => {
 		setTouched(true);
@@ -657,6 +707,15 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 				</p>
 			)}
 
+			{/* Configurable bid-ask spread between buy and sell price (#951) */}
+			<SpreadIndicator
+				buyPriceStroops={keyConfig?.buyPriceStroops}
+				sellPriceStroops={keyConfig?.sellPriceStroops}
+				spreadStroops={keyConfig?.spreadStroops}
+				spreadBps={keyConfig?.spreadBps}
+				isLoading={isKeyConfigLoading}
+			/>
+
 			{side === 'sell' && (
 				<LaunchPenaltyWarning visible={launchPenalty.applies} penaltyBps={launchPenalty.penaltyBps} />
 			)}
@@ -737,6 +796,15 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 							/>
 						)}
 				</div>
+
+				{side === 'buy' && (
+					<CircuitBreakerStatusIndicator
+						impactPercent={priceImpactPercent}
+						thresholdPercent={effectiveCircuitBreakerThresholdPercent}
+						thresholdBps={effectiveCircuitBreakerThresholdBps}
+						isValid={amountValid}
+					/>
+				)}
 
 				<NetworkFeeHint variant="text" label="Approx. network fee" fee={networkFeeCopy} className="text-white/45" />
 
@@ -822,7 +890,7 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 		</>
 	);
 
-	const confirmationModal = (
+	const confirmationModal = (side === 'buy' || side === 'sell') ? (
 		<TradeConfirmationModal
 			open={confirmationOpen}
 			onOpenChange={setConfirmationOpen}
@@ -840,6 +908,7 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 			minPriceStroops={slippageBounds?.minPriceStroops ?? null}
 			priceImpactPercent={priceImpactPercent}
 			onConfirm={async () => {
+				if (isCircuitBreakerBreached) return;
 				await onConfirm(parsedAmount, pricePreview, slippageBounds);
 				if (side === 'buy' && creatorId) incrementHolding(creatorId, parsedAmount);
 				setConfirmationOpen(false);
@@ -847,7 +916,7 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 			onCancel={() => setConfirmationOpen(false)}
 			isSubmitting={isSubmitting}
 		/>
-	);
+	) : null;
 
 	if (isMobile) {
 		return (

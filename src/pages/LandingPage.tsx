@@ -2091,7 +2091,9 @@ function LandingPage() {
 					onConfirm={handleConfirmTrade}
 				/>
 			</TradePanelErrorBoundary>
-			<TradeShortcutHints open={tradeDialogOpen} side={tradeSide} />
+			{(tradeSide === 'buy' || tradeSide === 'sell') && (
+				<TradeShortcutHints open={tradeDialogOpen} side={tradeSide} />
+			)}
 			<KeyboardShortcutsHelp
 				open={shortcutsHelpOpen}
 				onOpenChange={setShortcutsHelpOpen}
