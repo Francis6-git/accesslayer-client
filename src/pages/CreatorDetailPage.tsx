@@ -4,6 +4,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCreatorDetail, usePriceHistory } from '@/hooks/useCreators';
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed';
 import { useCreatorProfileStaleIndicator } from '@/hooks/useCreatorProfileStaleIndicator';
+import { useOnChainMetadata } from '@/hooks/useOnChainMetadata';
+import { resolveIpfsUrl } from '@/utils/ipfs.utils';
 import CreatorBreadcrumb from '@/components/common/CreatorBreadcrumb';
 import CreatorProfileHeader from '@/components/common/CreatorProfileHeader';
 import CreatorProfileInfoGrid from '@/components/common/CreatorProfileInfoGrid';
@@ -15,6 +17,7 @@ import KeySimulationTool from '@/components/common/KeySimulationTool';
 import BuyCooldownCountdown from '@/components/common/BuyCooldownCountdown';
 import StakingRewardsSection from '@/components/common/StakingRewardsSection';
 import DeprecationNotice from '@/components/common/DeprecationNotice';
+import DeprecationBanner from '@/components/common/DeprecationBanner';
 import SubscriptionAccessGate from '@/components/common/SubscriptionAccessGate';
 import { isKeyDeprecated } from '@/utils/keyDeprecation.utils';
 import { Button } from '@/components/ui/button';
@@ -64,6 +67,7 @@ import type { KeyBuybackReceipt } from '@/hooks/useKeyBuyback';
 import { usePerformanceBond } from '@/hooks/usePerformanceBond';
 import PerformanceBondPanel from '@/components/common/PerformanceBondPanel';
 import WhitelistStatusBadge from '@/components/common/WhitelistStatusBadge';
+import ShareModal from '@/components/common/ShareModal';
 import {
 	useTradeCooldownStatus,
 	invalidateTradeCooldownStatus,
@@ -76,6 +80,7 @@ import {
 import TradeCooldownButton from '@/components/common/TradeCooldownButton';
 import KeyHolderList from '@/components/common/KeyHolderList';
 import HolderConcentrationChart from '@/components/common/HolderConcentrationChart';
+import SectionErrorBoundary from '@/components/common/SectionErrorBoundary';
 import { useAccount } from 'wagmi';
 
 function CreatorDetailPageContent() {
@@ -90,6 +95,11 @@ function CreatorDetailPageContent() {
 	const [buybackModalOpen, setBuybackModalOpen] = useState(false);
 	const [recentSettlement, setRecentSettlement] =
 		useState<KeyBuybackReceipt | null>(null);
+	const [shareModalOpen, setShareModalOpen] = useState(false);
+	const [lastPurchasedAmount, setLastPurchasedAmount] = useState<
+		number | null
+	>(null);
+	const [deprecationDismissed, setDeprecationDismissed] = useState(false);
 	const [buyDialogOpen, setBuyDialogOpen] = useState(false);
 	const [tradeSubmitting, setTradeSubmitting] = useState(false);
 	const [interval, setInterval] = useState<PriceHistoryInterval>('24h');
@@ -148,7 +158,7 @@ function CreatorDetailPageContent() {
 
 	/*
 	 * Per-user buy cooldown:
-	 * prefer the user's position-level value and fall back to the creator-wide
+	 * Prefer the user's position-level value and fall back to the creator-wide
 	 * value returned by the creator detail endpoint.
 	 */
 	const nextBuyAllowedAt =
@@ -200,10 +210,10 @@ function CreatorDetailPageContent() {
 	});
 
 	/*
-	 * Early-access whitelist.
+	 * Early-access / whitelist logic.
 	 *
-	 * Keep the wallet-aware logic from your version while also supporting
-	 * the newer creator.whitelist / creator.isWhitelistEnabled fields.
+	 * Supports both the newer whitelist fields from the maintainer and
+	 * the early-access fields from your branch.
 	 */
 	const isWhitelistGateActive = Boolean(
 		creator?.isWhitelistEnabled ??
@@ -253,19 +263,57 @@ function CreatorDetailPageContent() {
 			: undefined;
 
 	/*
-	 * Track stale data indicator.
+	 * On-chain metadata.
+	 */
+	const {
+		data: onChainMetadata,
+		isLoading: isOnChainLoading,
+		isError: isOnChainError,
+		refetch: refetchOnChainMetadata,
+	} = useOnChainMetadata(id || '');
+
+	const isFallbackActive = isOnChainError || !onChainMetadata;
+	const metadata = onChainMetadata ?? {};
+
+	const displayName =
+		metadata.name || creator?.title || creator?.name || 'Unnamed creator';
+
+	const displaySymbol = metadata.symbol;
+
+	const displayDescription =
+		metadata.description || creator?.description || creator?.bio;
+
+	const rawAvatar =
+		metadata.image ||
+		metadata.imageCid ||
+		metadata.image_cid ||
+		metadata.ipfsCid ||
+		metadata.ipfs_cid ||
+		metadata.avatarUri ||
+		metadata.avatar_uri ||
+		metadata.cid;
+
+	const displayAvatar =
+		resolveIpfsUrl(rawAvatar) || creator?.avatarUri || creator?.thumbnail;
+
+	/*
+	 * Track stale data indicator, including the on-chain metadata fallback.
 	 */
 	const { shouldShowBadge, handleRefetch } = useCreatorProfileStaleIndicator(
 		id || '',
-		isFetching,
-		() => refetch()
+		isFetching || isOnChainLoading,
+		() => {
+			void refetch();
+			void refetchOnChainMetadata();
+		}
 	);
+
+	const showStaleIndicator = shouldShowBadge || isFallbackActive;
 
 	/*
 	 * Trade mutation.
 	 *
-	 * Keep the connected wallet as the mutation identity rather than using a
-	 * hard-coded demo wallet.
+	 * Use the connected wallet rather than a hard-coded demo wallet.
 	 */
 	const tradeMutation = useTradeMutation(connectedWalletAddress ?? '');
 
@@ -305,12 +353,14 @@ function CreatorDetailPageContent() {
 
 			showToast.transactionSuccess(
 				'Trade confirmed',
-				`Bought ${formatNumber(amount)} key${amount === 1 ? '' : 's'} from ${
-					creator?.title || 'Creator'
-				}`
+				`Bought ${formatNumber(amount)} key${
+					amount === 1 ? '' : 's'
+				} from ${creator?.title || 'Creator'}`
 			);
 
 			setBuyDialogOpen(false);
+			setLastPurchasedAmount(amount);
+			setShareModalOpen(true);
 		} catch (error) {
 			showToast.error(getSignatureErrorMessage(error));
 		} finally {
@@ -343,7 +393,7 @@ function CreatorDetailPageContent() {
 						Creator not found
 					</h1>
 
-					<p className="text-white/70 font-jakarta">
+					<p className="font-jakarta text-white/70">
 						We couldn't find a creator with that ID.
 					</p>
 
@@ -440,7 +490,6 @@ function CreatorDetailPageContent() {
 				recentFeeInflow: creator.recentFeeInflow,
 			}
 		: {
-				// Demo values until the key detail API returns staking pool stats.
 				stakingPoolBalance: 4820,
 				totalStaked: creator.creatorShareSupply
 					? Math.floor(creator.creatorShareSupply / 4)
@@ -451,6 +500,13 @@ function CreatorDetailPageContent() {
 	return (
 		<main className="min-h-screen bg-[#06111f] px-6 py-16 text-white md:px-12">
 			<div className="mx-auto max-w-7xl space-y-8">
+				{creator.deprecation && !deprecationDismissed && (
+					<DeprecationBanner
+						deprecation={creator.deprecation}
+						onDismiss={() => setDeprecationDismissed(true)}
+					/>
+				)}
+
 				<CreatorBreadcrumb
 					parentLabel="Marketplace"
 					parentHref="/"
@@ -476,16 +532,27 @@ function CreatorDetailPageContent() {
 				/>
 
 				<div className="flex items-start gap-3">
-					<div className="min-w-0 flex-1">
+					<div className="min-w-0 flex-1 space-y-2">
+						<CreatorProfileStaleIndicator
+							visible={showStaleIndicator}
+							isRefetching={isFetching || isOnChainLoading}
+							onRefresh={() => {
+								void refetch();
+								void refetchOnChainMetadata();
+							}}
+						/>
+
 						<CreatorProfileHeader
-							name={creator.title}
+							name={displayName}
+							symbol={displaySymbol}
 							handle={creator.socialHandle || creator.instructorId}
 							creatorId={creator.id}
 							isVerified={creator.isVerified}
-							avatarUrl={creator.thumbnail}
-							bio={creator.description}
+							avatarUrl={displayAvatar}
+							bio={displayDescription}
 							priceStroops={resolveCreatorKeyPriceStroops(creator)}
 							showBackButton={hasMounted}
+							isOnChainLoading={isOnChainLoading}
 							onBack={() => {
 								if (
 									window.history.length > 1 &&
@@ -502,18 +569,20 @@ function CreatorDetailPageContent() {
 
 					<WatchlistButton
 						creator={creator}
-						labelName={creator.title}
+						labelName={displayName}
 						className="mt-3 size-11 shrink-0 sm:size-9"
 					/>
 				</div>
 
 				{/* Historical Price Chart */}
-				<PriceHistoryChart
-					data={priceHistory}
-					interval={interval}
-					isLoading={isPriceHistoryLoading}
-					onIntervalChange={setInterval}
-				/>
+				<SectionErrorBoundary sectionName="price history">
+					<PriceHistoryChart
+						data={priceHistory}
+						interval={interval}
+						isLoading={isPriceHistoryLoading}
+						onIntervalChange={setInterval}
+					/>
+				</SectionErrorBoundary>
 
 				{/* 4 Stat Cards */}
 				<div data-testid="creator-stat-cards">
@@ -521,20 +590,24 @@ function CreatorDetailPageContent() {
 				</div>
 
 				{/* Key Stats Panel */}
-				<KeyStatsPanel
-					stats={keyStats}
-					isLoading={isKeyStatsLoading}
-					isError={isKeyStatsError}
-					uniqueTraders={uniqueTraders}
-					isUniqueTradersLoading={isUniqueTradersLoading}
-				/>
+				<SectionErrorBoundary sectionName="key statistics">
+					<KeyStatsPanel
+						stats={keyStats}
+						isLoading={isKeyStatsLoading}
+						isError={isKeyStatsError}
+						uniqueTraders={uniqueTraders}
+						isUniqueTradersLoading={isUniqueTradersLoading}
+					/>
+				</SectionErrorBoundary>
 
 				{/* Performance Bond Status Panel */}
-				<PerformanceBondPanel
-					bond={performanceBond}
-					isLoading={isPerformanceBondLoading}
-					isError={isPerformanceBondError}
-				/>
+				<SectionErrorBoundary sectionName="performance bond">
+					<PerformanceBondPanel
+						bond={performanceBond}
+						isLoading={isPerformanceBondLoading}
+						isError={isPerformanceBondError}
+					/>
+				</SectionErrorBoundary>
 
 				{/* Deprecation Notice */}
 				{isKeyDeprecated(creator) && (
@@ -672,6 +745,10 @@ function CreatorDetailPageContent() {
 						).replace(' XLM', '')}
 						userAddress={userAddress}
 						userHoldingsCount={holdingsCount}
+						onClick={() => {
+							setLastPurchasedAmount(holdingsCount);
+							setShareModalOpen(true);
+						}}
 					/>
 				</div>
 
@@ -760,10 +837,12 @@ function CreatorDetailPageContent() {
 						</div>
 
 						{/* Graduated Curve Milestones */}
-						<GraduatedCurveMilestoneChart
-							keyId={creator.id}
-							currentSupply={creator.creatorShareSupply ?? 0}
-						/>
+						<SectionErrorBoundary sectionName="curve milestones">
+							<GraduatedCurveMilestoneChart
+								keyId={creator.id}
+								currentSupply={creator.creatorShareSupply ?? 0}
+							/>
+						</SectionErrorBoundary>
 
 						{/* Buy Simulation Tool */}
 						<KeySimulationTool
@@ -783,10 +862,12 @@ function CreatorDetailPageContent() {
 						Holder Concentration
 					</h2>
 
-					<HolderConcentrationChart
-						holders={holders}
-						totalSupply={creator.creatorShareSupply}
-					/>
+					<SectionErrorBoundary sectionName="holder concentration">
+						<HolderConcentrationChart
+							holders={holders}
+							totalSupply={creator.creatorShareSupply}
+						/>
+					</SectionErrorBoundary>
 				</div>
 
 				{/* Fee Structure */}
@@ -798,7 +879,7 @@ function CreatorDetailPageContent() {
 
 						<CreatorProfileStaleIndicator
 							visible={shouldShowBadge}
-							isRefetching={isFetching}
+							isRefetching={isFetching || isOnChainLoading}
 							onRefresh={handleRefetch}
 						/>
 					</div>
@@ -807,13 +888,15 @@ function CreatorDetailPageContent() {
 				</div>
 
 				{/* Co-Creator Section */}
-				<CoCreatorSection
-					courseId={creator.id}
-					coCreatorAddress={creator.coCreatorAddress}
-					coCreatorSplitBps={creator.coCreatorSplitBps}
-					totalPaidToCoCreator={creator.totalPaidToCoCreator}
-					totalPaidToCreator={creator.totalPaidToCreator}
-				/>
+				<SectionErrorBoundary sectionName="co-creator information">
+					<CoCreatorSection
+						courseId={creator.id}
+						coCreatorAddress={creator.coCreatorAddress}
+						coCreatorSplitBps={creator.coCreatorSplitBps}
+						totalPaidToCoCreator={creator.totalPaidToCoCreator}
+						totalPaidToCreator={creator.totalPaidToCreator}
+					/>
+				</SectionErrorBoundary>
 
 				{/* Key Holders */}
 				<div
@@ -824,14 +907,16 @@ function CreatorDetailPageContent() {
 						Key Holders
 					</h2>
 
-					<KeyHolderList
-						holders={holders}
-						hasNextPage={hasNextPage}
-						isFetchingNextPage={isFetchingNextPage}
-						fetchNextPage={() => {
-							void fetchNextPage();
-						}}
-					/>
+					<SectionErrorBoundary sectionName="key holders">
+						<KeyHolderList
+							holders={holders}
+							hasNextPage={hasNextPage}
+							isFetchingNextPage={isFetchingNextPage}
+							fetchNextPage={() => {
+								void fetchNextPage();
+							}}
+						/>
+					</SectionErrorBoundary>
 				</div>
 
 				{/* Gated Content */}
@@ -861,7 +946,9 @@ function CreatorDetailPageContent() {
 						Activity
 					</h2>
 
-					<CreatorActivityFeed creatorId={creator.id} />
+					<SectionErrorBoundary sectionName="creator activity">
+						<CreatorActivityFeed creatorId={creator.id} />
+					</SectionErrorBoundary>
 				</div>
 
 				{/* Key Buyback Modal */}
@@ -899,6 +986,25 @@ function CreatorDetailPageContent() {
 						onConfirm={handleConfirmBuy}
 						isSubmitting={tradeSubmitting}
 						requireConfirmation={true}
+					/>
+				)}
+
+				{/* Share Modal */}
+				{creator && (
+					<ShareModal
+						open={shareModalOpen}
+						onOpenChange={setShareModalOpen}
+						creatorId={creator.id}
+						creatorName={creator.title || creator.name || 'Creator'}
+						amount={
+							lastPurchasedAmount ??
+							(holdingsCount > 0 ? holdingsCount : null)
+						}
+						priceXlm={formatDisplayKeyPrice(
+							resolveCreatorKeyPriceStroops(creator)
+						).replace(' XLM', '')}
+						userAddress={userAddress}
+						onDismiss={() => setShareModalOpen(false)}
 					/>
 				)}
 			</div>
