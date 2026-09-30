@@ -10,7 +10,7 @@ import CreatorProfileInfoGrid from '@/components/common/CreatorProfileInfoGrid';
 import CreatorActivityFeed from '@/components/common/CreatorActivityFeed';
 import CreatorProfileStaleIndicator from '@/components/common/CreatorProfileStaleIndicator';
 import CreatorProfileStatRow from '@/components/common/CreatorProfileStatRow';
-import { BondingCurveChart } from '@/components/common/BondingCurveChart';
+import BondingCurveChart from '@/components/common/BondingCurveChart';
 import KeySimulationTool from '@/components/common/KeySimulationTool';
 import BuyCooldownCountdown from '@/components/common/BuyCooldownCountdown';
 import StakingRewardsSection from '@/components/common/StakingRewardsSection';
@@ -207,27 +207,24 @@ function CreatorDetailPageContent() {
 	 */
 	const isWhitelistGateActive = Boolean(
 		creator?.isWhitelistEnabled ??
-			creator?.whitelistEnabled ??
-			creator?.earlyAccessEnabled ??
-			false
+		creator?.whitelistEnabled ??
+		creator?.earlyAccessEnabled ??
+		false
 	);
 
 	const whitelistEntries = creator?.whitelist ?? [];
 
 	const isUserWhitelisted = Boolean(
 		userAddress &&
-			(
-				whitelistEntries.some(
-					entry =>
-						entry.walletAddress?.toUpperCase() ===
-						userAddress.toUpperCase()
-				) ||
-				(creator?.earlyAccessWhitelist ?? []).some(
-					address => address.toLowerCase() === userAddress.toLowerCase()
-				) ||
-				(creator?.instructorId &&
-					creator.instructorId.toUpperCase() === userAddress.toUpperCase())
-			)
+		(whitelistEntries.some(
+			entry =>
+				entry.walletAddress?.toUpperCase() === userAddress.toUpperCase()
+		) ||
+			(creator?.earlyAccessWhitelist ?? []).some(
+				address => address.toLowerCase() === userAddress.toLowerCase()
+			) ||
+			(creator?.instructorId &&
+				creator.instructorId.toUpperCase() === userAddress.toUpperCase()))
 	);
 
 	const publicLaunchTimestamp = creator?.publicLaunchDate
@@ -235,8 +232,7 @@ function CreatorDetailPageContent() {
 		: null;
 
 	const hasValidPublicLaunchDate =
-		publicLaunchTimestamp != null &&
-		Number.isFinite(publicLaunchTimestamp);
+		publicLaunchTimestamp != null && Number.isFinite(publicLaunchTimestamp);
 
 	const isPublicLaunchPending =
 		hasValidPublicLaunchDate && publicLaunchTimestamp > Date.now();
@@ -259,8 +255,11 @@ function CreatorDetailPageContent() {
 	/*
 	 * Track stale data indicator.
 	 */
-	const { shouldShowBadge, handleRefetch } =
-		useCreatorProfileStaleIndicator(id || '', isFetching, () => refetch());
+	const { shouldShowBadge, handleRefetch } = useCreatorProfileStaleIndicator(
+		id || '',
+		isFetching,
+		() => refetch()
+	);
 
 	/*
 	 * Trade mutation.
@@ -275,11 +274,10 @@ function CreatorDetailPageContent() {
 	 */
 	const { data: tradeCooldownStatus } = useTradeCooldownStatus(id || '');
 
-	const tradeCooldown: ActiveTradeCooldown | null =
-		resolveActiveTradeCooldown(
-			tradeCooldownStatus,
-			nextBuyAllowedAt
-		);
+	const tradeCooldown: ActiveTradeCooldown | null = resolveActiveTradeCooldown(
+		tradeCooldownStatus,
+		nextBuyAllowedAt
+	);
 
 	const isTradeCooldownActive = isActiveCooldown(tradeCooldown);
 
@@ -349,10 +347,7 @@ function CreatorDetailPageContent() {
 						We couldn't find a creator with that ID.
 					</p>
 
-					<Link
-						to="/creators"
-						className="text-amber-400 hover:underline"
-					>
+					<Link to="/creators" className="text-amber-400 hover:underline">
 						Back to creators
 					</Link>
 				</main>
@@ -381,10 +376,7 @@ function CreatorDetailPageContent() {
 	 */
 	const auctionLeadBid =
 		auctionPhase === 'active'
-			? resolveHighestBid(
-					creator.auctionBids,
-					creator.auctionHighestBid
-				)
+			? resolveHighestBid(creator.auctionBids, creator.auctionHighestBid)
 			: null;
 
 	const auctionStatValue =
@@ -397,15 +389,11 @@ function CreatorDetailPageContent() {
 	const statItems = [
 		{
 			label:
-				auctionPhase === 'active'
-					? 'Current Highest Bid'
-					: 'Current Price',
+				auctionPhase === 'active' ? 'Current Highest Bid' : 'Current Price',
 			value:
 				auctionPhase === 'active'
 					? auctionStatValue
-					: formatDisplayKeyPrice(
-							resolveCreatorKeyPriceStroops(creator)
-						),
+					: formatDisplayKeyPrice(resolveCreatorKeyPriceStroops(creator)),
 		},
 		{
 			label: 'Key Supply',
@@ -438,9 +426,7 @@ function CreatorDetailPageContent() {
 	const twapPrice = twap?.priceStroops ?? null;
 
 	const twapDelta =
-		twapPrice != null && spotPrice != null
-			? twapPrice - spotPrice
-			: null;
+		twapPrice != null && spotPrice != null ? twapPrice - spotPrice : null;
 
 	const hasRealStakingData =
 		creator.stakingPoolBalance != null ||
@@ -493,16 +479,12 @@ function CreatorDetailPageContent() {
 					<div className="min-w-0 flex-1">
 						<CreatorProfileHeader
 							name={creator.title}
-							handle={
-								creator.socialHandle || creator.instructorId
-							}
+							handle={creator.socialHandle || creator.instructorId}
 							creatorId={creator.id}
 							isVerified={creator.isVerified}
 							avatarUrl={creator.thumbnail}
 							bio={creator.description}
-							priceStroops={resolveCreatorKeyPriceStroops(
-								creator
-							)}
+							priceStroops={resolveCreatorKeyPriceStroops(creator)}
 							showBackButton={hasMounted}
 							onBack={() => {
 								if (
@@ -557,9 +539,7 @@ function CreatorDetailPageContent() {
 				{/* Deprecation Notice */}
 				{isKeyDeprecated(creator) && (
 					<div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 p-4">
-						<DeprecationNotice
-							reason={creator.deprecationReason}
-						/>
+						<DeprecationNotice reason={creator.deprecationReason} />
 					</div>
 				)}
 
@@ -608,26 +588,21 @@ function CreatorDetailPageContent() {
 							</span>
 						)}
 
-						{creator.publicLaunchDate &&
-							hasValidPublicLaunchDate && (
-								<p className="mt-2 text-sm text-white/70">
-									{isPublicLaunchPending
-										? 'Public launch: '
-										: 'Public trading is open. '}
+						{creator.publicLaunchDate && hasValidPublicLaunchDate && (
+							<p className="mt-2 text-sm text-white/70">
+								{isPublicLaunchPending
+									? 'Public launch: '
+									: 'Public trading is open. '}
 
-									{isPublicLaunchPending && (
-										<time
-											dateTime={
-												creator.publicLaunchDate
-											}
-										>
-											{new Date(
-												creator.publicLaunchDate
-											).toLocaleString()}
-										</time>
-									)}
-								</p>
-							)}
+								{isPublicLaunchPending && (
+									<time dateTime={creator.publicLaunchDate}>
+										{new Date(
+											creator.publicLaunchDate
+										).toLocaleString()}
+									</time>
+								)}
+							</p>
+						)}
 					</div>
 
 					{isKeyDeprecated(creator) ? (
@@ -676,9 +651,7 @@ function CreatorDetailPageContent() {
 						auctionSupply={creator.auctionSupply}
 						auctionSold={creator.auctionSold}
 						auctionEndsAt={creator.auctionEndsAt}
-						auctionMinIncrement={
-							creator.auctionMinIncrement
-						}
+						auctionMinIncrement={creator.auctionMinIncrement}
 						auctionHighestBid={creator.auctionHighestBid}
 						auctionBids={creator.auctionBids}
 					/>
@@ -686,9 +659,7 @@ function CreatorDetailPageContent() {
 
 				{/* Buy Cooldown Countdown */}
 				{userAddress && !isTradeCooldownActive && (
-					<BuyCooldownCountdown
-						nextBuyAllowedAt={nextBuyAllowedAt}
-					/>
+					<BuyCooldownCountdown nextBuyAllowedAt={nextBuyAllowedAt} />
 				)}
 
 				{/* Share to X */}
@@ -710,10 +681,7 @@ function CreatorDetailPageContent() {
 						className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4"
 						data-testid="twap-price"
 					>
-						<div
-							aria-label="Loading 24 hour TWAP"
-							role="status"
-						>
+						<div aria-label="Loading 24 hour TWAP" role="status">
 							<Skeleton className="h-3 w-24" />
 							<Skeleton className="mt-2 h-6 w-32" />
 						</div>
@@ -763,10 +731,7 @@ function CreatorDetailPageContent() {
 									}
 								>
 									{twapDelta < 0 ? '▼' : '▲'}{' '}
-									{formatDisplayKeyPrice(
-										Math.abs(twapDelta)
-									)}{' '}
-									vs spot
+									{formatDisplayKeyPrice(Math.abs(twapDelta))} vs spot
 								</span>
 							)}
 						</div>
@@ -774,10 +739,7 @@ function CreatorDetailPageContent() {
 				) : null}
 
 				{/* Staking Rewards */}
-				<StakingRewardsSection
-					{...stakingStats}
-					isLoading={isLoading}
-				/>
+				<StakingRewardsSection {...stakingStats} isLoading={isLoading} />
 
 				{/* Price Curve */}
 				{auctionPhase !== 'active' && (
@@ -792,9 +754,7 @@ function CreatorDetailPageContent() {
 
 							<BondingCurveChart
 								data={chartData}
-								currentSupply={
-									creator.creatorShareSupply ?? 100
-								}
+								currentSupply={creator.creatorShareSupply ?? 100}
 								height={300}
 							/>
 						</div>
@@ -802,16 +762,12 @@ function CreatorDetailPageContent() {
 						{/* Graduated Curve Milestones */}
 						<GraduatedCurveMilestoneChart
 							keyId={creator.id}
-							currentSupply={
-								creator.creatorShareSupply ?? 0
-							}
+							currentSupply={creator.creatorShareSupply ?? 0}
 						/>
 
 						{/* Buy Simulation Tool */}
 						<KeySimulationTool
-							currentSupply={
-								creator.creatorShareSupply ?? 100
-							}
+							currentSupply={creator.creatorShareSupply ?? 100}
 							protocolFeeBps={creator.protocolFeeBps}
 							creatorFeeBps={creator.creatorFeeBps}
 						/>
@@ -891,13 +847,9 @@ function CreatorDetailPageContent() {
 					>
 						<div className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
 							<p className="text-white/80">
-								🎉 Welcome to the exclusive content section!
-								Here you can access premium videos, articles,
-								and perks from{' '}
-								{creator.title ||
-									creator.name ||
-									'this creator'}
-								.
+								🎉 Welcome to the exclusive content section! Here you
+								can access premium videos, articles, and perks from{' '}
+								{creator.title || creator.name || 'this creator'}.
 							</p>
 						</div>
 					</SubscriptionAccessGate>
@@ -918,11 +870,7 @@ function CreatorDetailPageContent() {
 						open={buybackModalOpen}
 						onOpenChange={setBuybackModalOpen}
 						creatorId={creator.id}
-						creatorTitle={
-							creator.title ||
-							creator.name ||
-							'Creator Key'
-						}
+						creatorTitle={creator.title || creator.name || 'Creator Key'}
 						holdingsCount={holdingsCount}
 						buybackPriceStroops={
 							resolveCreatorKeyPriceStroops(creator) ?? 0
@@ -939,13 +887,9 @@ function CreatorDetailPageContent() {
 					<TradeDialog
 						open={buyDialogOpen}
 						side="buy"
-						creatorName={
-							creator.title || creator.name || 'Creator'
-						}
+						creatorName={creator.title || creator.name || 'Creator'}
 						availableHoldings={holdingsCount}
-						keyPriceStroops={resolveCreatorKeyPriceStroops(
-							creator
-						)}
+						keyPriceStroops={resolveCreatorKeyPriceStroops(creator)}
 						currentSupply={creator.creatorShareSupply}
 						maxBuyQuantity={creator.maxBuyQuantity}
 						launchPenaltyBps={creator.launchPenaltyBps}
