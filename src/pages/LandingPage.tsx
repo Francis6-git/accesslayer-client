@@ -50,6 +50,10 @@ import {
 	useContractPausedStore,
 	selectIsPaused,
 } from '@/hooks/useContractPausedStore';
+import KeyAnalyticsPanel from '@/components/common/KeyAnalyticsPanel';
+import TimelockAdminPanel from '@/components/common/TimelockAdminPanel';
+import MultiKeyStakingVault from '@/components/common/MultiKeyStakingVault';
+import { CreatorKeyDashboard } from '@/components/common/CreatorKeyDashboard';
 import { useAccount } from 'wagmi';
 import { useNetworkMismatch } from '@/hooks/useNetworkMismatch';
 import {
@@ -1917,6 +1921,10 @@ function LandingPage() {
 													)} shares available`
 										}
 									/>
+									<KeyAnalyticsPanel
+										creatorId={featuredCreator?.id ?? 'alex-rivers'}
+										className="mt-2"
+									/>
 									{/* Issue 557: Stellar address with copy button */}
 									<div className="flex items-center justify-between gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2">
 										<div className="min-w-0 flex-1">
@@ -2020,6 +2028,18 @@ function LandingPage() {
 							</MarketplaceSection>
 						)}
 					</SectionErrorBoundary>
+
+					<SectionDivider title="Staking Vault & Governance" spacing="relaxed" />
+
+					<MultiKeyStakingVault className="mt-6" />
+
+					<TimelockAdminPanel className="mt-6" />
+
+					<SectionDivider title="Creator Key Management" spacing="relaxed" />
+
+					<div className="mt-6">
+						<CreatorKeyDashboard />
+					</div>
 
 					<div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-slate-950/85 backdrop-blur-md md:hidden">
 						<div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-3">
