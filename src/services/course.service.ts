@@ -1,6 +1,7 @@
 // src/services/course.service.ts
 import { BaseApiService, ApiError, type APIResponse } from './api.service';
 import type { CreatorSocialLinks } from '@/types/creatorProfile';
+import type { ContractDynamicFeeRate } from '@/utils/dynamicFeeRate.utils';
 import { cacheManager } from '@/utils/cache.utils';
 
 export interface Course {
@@ -44,6 +45,20 @@ export interface Course {
 	holders?: number;
 	/** XLM currently held in the staking reward pool for this key. */
 	stakingPoolBalance?: number;
+	/**
+	 * Deprecation record for this key (issue #996), when deprecated.
+	 * Shape matches DeprecationBanner's KeyDeprecation props.
+	 */
+	deprecation?: {
+		/** ISO 8601 date the key was (or will be) deprecated. */
+		deprecatedAt: string;
+		/** Human-readable reason the key was deprecated. */
+		reason: string;
+		/** Successor key's creator id, when one has been designated. */
+		successorId?: string;
+		/** Display name of the successor key, for the CTA label. */
+		successorName?: string;
+	};
 	/** Number of keys staked across all holders. */
 	totalStaked?: number;
 	/** Protocol fees that flowed into the staking pool over the last month. */
@@ -58,6 +73,25 @@ export interface Course {
 	auctionSupply?: number;
 	/** Keys sold through the auction so far. */
 	auctionSold?: number;
+	/**
+	 * ISO timestamp for when the pre-launch bidding window closes and the
+	 * key goes live on the bonding curve (#924). When absent, the auction
+	 * ends once `auctionSold` reaches `auctionSupply`.
+	 */
+	auctionEndsAt?: string;
+	/**
+	 * Minimum amount (XLM) a new bid must exceed the current highest bid by
+	 * (#924). When absent, a 5% increment over the highest bid is assumed.
+	 */
+	auctionMinIncrement?: number;
+	/**
+	 * Current highest bid in XLM (#924). When `auctionBids` is present this
+	 * is usually derived from the history instead; the explicit field is the
+	 * source of truth for auctions whose history hasn't been loaded yet.
+	 */
+	auctionHighestBid?: number;
+	/** Pre-launch auction bid history, newest first (#924). */
+	auctionBids?: AuctionBidEntry[];
 	/**
 	 * Early-sell penalty in basis points (0–2000 = 0%–20%).
 	 * Applied to sells within the first 7 days after key creation.
@@ -375,6 +409,21 @@ export interface KeyStats {
 	twap24h: number | null;
 }
 
+
+/** Single bid placed during a key's pre-launch auction window (#924). */
+export interface AuctionBidEntry {
+	/** Unique bid id from the contract. */
+	id: string;
+	/** Wallet that placed the bid. */
+	bidderAddress: string;
+	/** Optional display name for the bidder. */
+	bidderName?: string;
+	/** Bid amount in XLM. */
+	amount: number;
+	/** ISO timestamp when the bid was placed. */
+	placedAt: string;
+}
+
 /**
  * Unique trader count for a creator key (#1020): distinct wallets that have
  * bought or sold the key at least once.
@@ -384,6 +433,7 @@ export interface KeyUniqueTraders {
 	uniqueTraders: number | null;
 	/** Unique trader count as of 24 hours ago, used for the trend indicator. */
 	uniqueTraders24hAgo: number | null;
+
 }
 
 class CourseService extends BaseApiService {
@@ -526,6 +576,23 @@ class CourseService extends BaseApiService {
 				`/keys/${keyId}/stats`
 			);
 			return response.data.data;
+		} catch (error) {
+			throw this.handleError(error);
+		}
+	}
+
+
+	/**
+	 * Get the live pre-launch auction bid history for a key (#924) —
+	 * GET /keys/:keyId/auction/bids. Returns the bids newest first so the
+	 * client can render the current leader without extra sorting.
+	 */
+	async getAuctionBids(keyId: string): Promise<AuctionBidEntry[]> {
+		try {
+			const response = await this.api.get<
+				APIResponse<AuctionBidEntry[]>
+			>(`/keys/${keyId}/auction/bids`);
+			return response.data.data ?? [];
 		} catch (error) {
 			throw this.handleError(error);
 		}
@@ -688,6 +755,28 @@ class CourseService extends BaseApiService {
 			);
 			return response.data.data;
 		} catch (error) {
+			throw this.handleError(error);
+		}
+	}
+
+	// Get the dynamic fee rate from the contract - GET /keys/:keyId/fee-rate (#994)
+	async getDynamicFeeRate(
+		keyId: string,
+		config?: { signal?: AbortSignal }
+	): Promise<ContractDynamicFeeRate> {
+		try {
+			const response = await this.api.get<APIResponse<ContractDynamicFeeRate>>(
+				`/keys/${keyId}/fee-rate`,
+				{ signal: config?.signal }
+			);
+			return response.data.data;
+		} catch (error) {
+			// Cancellation must propagate untouched so callers can ignore it.
+			const name = (error as { name?: string } | null)?.name;
+			const code = (error as { code?: string } | null)?.code;
+			if (name === 'CanceledError' || name === 'AbortError' || code === 'ERR_CANCELED') {
+				throw error;
+			}
 			throw this.handleError(error);
 		}
 	}

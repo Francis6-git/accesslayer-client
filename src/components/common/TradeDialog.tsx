@@ -53,6 +53,15 @@ import {
 	type FeeBreakdown,
 } from '@/utils/pricePreview.utils';
 import {
+	buildDynamicFeeBreakdown,
+	type ContractDynamicFeeRate,
+	type DynamicFeeBreakdown as DynamicFeeBreakdownData,
+} from '@/utils/dynamicFeeRate.utils';
+import { courseService } from '@/services/course.service';
+import PriceImpactWarning from '@/components/common/PriceImpactWarning';
+import PriceImpactOverrideCheckbox from '@/components/common/PriceImpactOverrideCheckbox';
+import TradeConfirmationModal from '@/components/common/TradeConfirmationModal';
+import {
 	calculateTradePriceImpact,
 	PRICE_IMPACT_THRESHOLD_PERCENT,
 } from '@/utils/priceImpact.utils';
@@ -77,6 +86,23 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 
 export type TradeSide = 'buy' | 'sell' | 'stake' | 'transfer';
+
+/**
+ * Merges contract-returned dynamic fee rates over the dialog's configured
+ * defaults, keeping defaults wherever the contract omits a field (#994).
+ */
+function mergeFeeRates(
+	base: ContractDynamicFeeRate,
+	incoming: ContractDynamicFeeRate
+): ContractDynamicFeeRate {
+	return {
+		baseFeeBps: incoming.baseFeeBps ?? base.baseFeeBps,
+		volumeTierDiscountBps:
+			incoming.volumeTierDiscountBps ?? base.volumeTierDiscountBps,
+		protocolFeeBps: incoming.protocolFeeBps ?? base.protocolFeeBps,
+		creatorRoyaltyBps: incoming.creatorRoyaltyBps ?? base.creatorRoyaltyBps,
+	};
+}
 
 export interface TradeDialogProps {
 	open: boolean;
@@ -103,6 +129,8 @@ export interface TradeDialogProps {
 	maxBuyQuantity?: number | null;
 	/** Whether to display the confirmation modal step before submission (#919). Defaults to false. */
 	requireConfirmation?: boolean;
+	/** Optional XLM/USD spot rate for the confirmation fee USD equivalent (#994). */
+	xlmUsdRate?: number | null;
 	onOpenChange: (open: boolean) => void;
 	onConfirm: (
 		amount: number,
@@ -134,6 +162,7 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 	launchPenaltyBps,
 	maxBuyQuantity = null,
 	requireConfirmation = false,
+	xlmUsdRate = null,
 	onOpenChange,
 	onConfirm,
 	isSubmitting = false,
@@ -468,6 +497,138 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 
 	const isMobile = useIsMobile();
 
+	// Live dynamic fee rate from the contract (#994). Mirrors the debounced
+	// price-preview effect above: fetched while the dialog is open (with a
+	// small debounce) and re-fetched whenever the trade amount changes, so
+	// the confirmation screen quotes the rate the contract will actually
+	// charge. The breakdown is derived from the live rates and the current
+	// trade notional, so it refreshes whenever the amount changes.
+	const [dynamicFeeRates, setDynamicFeeRates] = useState<ContractDynamicFeeRate>(
+		{
+			protocolFeeBps,
+			creatorRoyaltyBps: creatorFeeBps,
+		}
+	);
+	const [isFeeRateLoading, setFeeRateLoading] = useState(false);
+	const [feeRateError, setFeeRateError] = useState<string | null>(null);
+	const feeRateAbortRef = useRef<AbortController | null>(null);
+
+	useEffect(() => {
+		if (!open) {
+			setDynamicFeeRates({ protocolFeeBps, creatorRoyaltyBps: creatorFeeBps });
+			setFeeRateLoading(false);
+			setFeeRateError(null);
+			return;
+		}
+
+		// Debounce to avoid hammering the contract while the user types.
+		const timeoutId = window.setTimeout(() => {
+			feeRateAbortRef.current?.abort();
+			const controller = new AbortController();
+			feeRateAbortRef.current = controller;
+
+			setFeeRateLoading(true);
+			setFeeRateError(null);
+
+			courseService
+				.getDynamicFeeRate(creatorName, { signal: controller.signal })
+				.then(rates => {
+					if (controller.signal.aborted) return;
+					// Merge over the dialog's configured rates so a partial
+					// contract payload never blanks a fee row.
+					setDynamicFeeRates(
+						mergeFeeRates(
+							{ protocolFeeBps, creatorRoyaltyBps: creatorFeeBps },
+							rates
+						)
+					);
+					setFeeRateLoading(false);
+				})
+				.catch(error => {
+					if (
+						controller.signal.aborted ||
+						(error instanceof Error && error.name === 'CanceledError')
+					) {
+						return;
+					}
+					if (error instanceof DOMException && error.name === 'AbortError') {
+						return;
+					}
+					// Keep the last known good rates; just surface the error.
+					setFeeRateError(
+						error instanceof Error
+							? error.message
+							: 'Failed to fetch the dynamic fee rate'
+					);
+					setFeeRateLoading(false);
+				});
+		}, 200);
+
+		return () => clearTimeout(timeoutId);
+	}, [open, creatorName, protocolFeeBps, creatorFeeBps]);
+
+	const handleFeeRateRetry = useCallback(() => {
+		setFeeRateError(null);
+		setFeeRateLoading(true);
+		courseService
+			.getDynamicFeeRate(creatorName)
+			.then(rates => {
+				setDynamicFeeRates(
+					mergeFeeRates(
+						{ protocolFeeBps, creatorRoyaltyBps: creatorFeeBps },
+						rates
+					)
+				);
+				setFeeRateLoading(false);
+			})
+			.catch(error => {
+				setFeeRateError(
+					error instanceof Error
+						? error.message
+						: 'Failed to fetch the dynamic fee rate'
+				);
+				setFeeRateLoading(false);
+			});
+	}, [creatorName, protocolFeeBps, creatorFeeBps]);
+
+	const dynamicFeeBreakdown = useMemo<DynamicFeeBreakdownData | null>(() => {
+		if (side === 'buy') {
+			if (
+				!amountValid ||
+				parsedAmount <= 0 ||
+				estimatedTotalStroops == null ||
+				estimatedTotalStroops <= 0
+			) {
+				return null;
+			}
+		} else if (
+			!amountValid ||
+			parsedAmount <= 0 ||
+			estimatedProceedsStroops == null ||
+			estimatedProceedsStroops <= 0
+		) {
+			return null;
+		}
+
+		return buildDynamicFeeBreakdown({
+			// Fees are computed on the gross key cost / gross proceeds — never
+			// on the fee-inclusive total — so components never compound.
+			notionalStroops:
+				side === 'buy' ? estimatedTotalStroops : estimatedProceedsStroops,
+			rates: dynamicFeeRates,
+			isSell: side === 'sell',
+			xlmUsdRate,
+		});
+	}, [
+		side,
+		amountValid,
+		parsedAmount,
+		estimatedTotalStroops,
+		estimatedProceedsStroops,
+		dynamicFeeRates,
+		xlmUsdRate,
+	]);
+
 	const bodyContent = (
 		<>
 			{/* Contract paused alert (#953) */}
@@ -670,6 +831,10 @@ const TradeDialog: React.FC<TradeDialogProps> = ({
 			amount={parsedAmount}
 			unitPriceStroops={keyPriceStroops}
 			totalStroops={slippageReferencePriceStroops}
+			feeBreakdown={dynamicFeeBreakdown}
+			feeIsLoading={isFeeRateLoading}
+			feeError={feeRateError}
+			onFeeRetry={handleFeeRateRetry}
 			slippageTolerancePercent={slippageTolerancePercent}
 			maxPriceStroops={slippageBounds?.maxPriceStroops ?? null}
 			minPriceStroops={slippageBounds?.minPriceStroops ?? null}

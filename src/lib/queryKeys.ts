@@ -23,6 +23,8 @@ export const queryKeys = {
 		infiniteList: (params?: Omit<GetCoursesParams, 'page'>) =>
 			['creators', 'infiniteList', params ?? null] as const,
 		detail: (id: string) => ['creators', 'detail', id] as const,
+		onChainMetadata: (creatorId: string) =>
+			['creators', creatorId, 'onChainMetadata'] as const,
 		priceHistory: (creatorId: string, interval: string) =>
 			['creators', creatorId, 'priceHistory', interval] as const,
 		holders: (creatorId: string) =>
@@ -32,6 +34,8 @@ export const queryKeys = {
 		twap: (creatorId: string) =>
 			['creators', creatorId, 'twap', '24h'] as const,
 		stats: (creatorId: string) => ['creators', creatorId, 'stats'] as const,
+		auctionBids: (creatorId: string) =>
+			['creators', creatorId, 'auction-bids'] as const,
 		uniqueTraders: (creatorId: string) =>
 			['creators', creatorId, 'unique-traders'] as const,
 		curveConfig: (creatorId: string) =>
@@ -71,8 +75,10 @@ export const queryKeys = {
 		activity: (address: string) => ['wallet', address, 'activity'] as const,
 		tradeHistory: (address: string) =>
 			['wallet', address, 'tradeHistory'] as const,
-		stakingPositions: (address: string) =>
-			['wallet', address, 'stakingPositions'] as const,
+	vestingPositions: (address: string) =>
+		['wallet', address, 'vestingPositions'] as const,
+	stakingPositions: (address: string) =>
+		['wallet', address, 'stakingPositions'] as const,
 		xlmBalance: (address: string) =>
 			['wallet', address, 'xlmBalance'] as const,
 	},
@@ -99,8 +105,13 @@ export const queryKeys = {
 		oracleCallers: () => ['admin', 'oracle', 'callers'] as const,
 		multiSigPending: () => ['admin', 'multisig', 'pending'] as const,
 		multiSigHistory: () => ['admin', 'multisig', 'history'] as const,
+		timelockPending: () => ['admin', 'timelock', 'pending'] as const,
+		timelockHistory: () => ['admin', 'timelock', 'history'] as const,
 		aclWhitelist: () => ['admin', 'acl', 'whitelist'] as const,
 		aclHistory: () => ['admin', 'acl', 'history'] as const,
+		upgradeProxyStatus: () => ['admin', 'proxy', 'status'] as const,
+		upgradeProxyPending: () => ['admin', 'proxy', 'pending'] as const,
+		upgradeProxyHistory: () => ['admin', 'proxy', 'history'] as const,
 	},
 	governance: {
 		all: () => ['governance'] as const,
@@ -169,4 +180,3 @@ export const queryKeys = {
 			['creatorRevenue', creatorId, 'withdrawals'] as const,
 	},
 } as const;
-
