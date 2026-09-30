@@ -46,7 +46,6 @@ import TradePanelErrorBoundary from '@/components/common/TradePanelErrorBoundary
 import NetworkMismatchBanner from '@/components/common/NetworkMismatchBanner';
 import StellarConnectionQualityBadge from '@/components/common/StellarConnectionQualityBadge';
 import AdminPauseControl from '@/components/common/AdminPauseControl';
-import ContractPausedBanner from '@/components/common/ContractPausedBanner';
 import {
 	useContractPausedStore,
 	selectIsPaused,

@@ -617,9 +617,8 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 					size="sm"
 					isPending={transactionState === 'submitting'}
 					pendingText="Processing..."
-					disabled={isNetworkMismatch || isPaused}
+					disabled={isNetworkMismatch || isPaused || isKeyDeprecated(creator)}
 					title={isPaused ? 'Trading suspended: contract is paused' : undefined}
-					disabled={isNetworkMismatch || isKeyDeprecated(creator)}
 					className={cn(
 						'rounded-xl font-bold',
 						!isConnected && 'border-white/10  hover:bg-white/5'
