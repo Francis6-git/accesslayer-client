@@ -4,30 +4,43 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useCreatorDetail, usePriceHistory } from '@/hooks/useCreators';
 import { useRecentlyViewed } from '@/hooks/useRecentlyViewed';
 import { useCreatorProfileStaleIndicator } from '@/hooks/useCreatorProfileStaleIndicator';
+import { useOnChainMetadata } from '@/hooks/useOnChainMetadata';
+import { resolveIpfsUrl } from '@/utils/ipfs.utils';
 import CreatorBreadcrumb from '@/components/common/CreatorBreadcrumb';
 import CreatorProfileHeader from '@/components/common/CreatorProfileHeader';
+import CreatorProfileInfoGrid from '@/components/common/CreatorProfileInfoGrid';
 import CreatorActivityFeed from '@/components/common/CreatorActivityFeed';
+import CreatorProfileStaleIndicator from '@/components/common/CreatorProfileStaleIndicator';
 import CreatorProfileStatRow from '@/components/common/CreatorProfileStatRow';
 import BondingCurveChart from '@/components/common/BondingCurveChart';
+import KeySimulationTool from '@/components/common/KeySimulationTool';
 import BuyCooldownCountdown from '@/components/common/BuyCooldownCountdown';
 import StakingRewardsSection from '@/components/common/StakingRewardsSection';
 import DeprecationNotice from '@/components/common/DeprecationNotice';
+import DeprecationBanner from '@/components/common/DeprecationBanner';
 import SubscriptionAccessGate from '@/components/common/SubscriptionAccessGate';
 import { isKeyDeprecated } from '@/utils/keyDeprecation.utils';
 import { Button } from '@/components/ui/button';
 import { CreatorDashboardSkeleton } from '@/components/common/CreatorSkeleton';
-import { formatNumber } from '@/utils/numberFormat.utils';
+import { bpsToPercent, formatNumber } from '@/utils/numberFormat.utils';
 import {
 	resolveCreatorKeyPriceStroops,
 	formatDisplayKeyPrice,
 } from '@/utils/keyPriceDisplay.utils';
+import {
+	resolveHighestBid,
+	formatAuctionBidAmount,
+} from '@/utils/auctionBid.utils';
 import KeyDetailPageErrorBoundary from '@/components/common/KeyDetailPageErrorBoundary';
 import { ApiError } from '@/services/api.service';
 import WatchlistButton from '@/components/common/WatchlistButton';
+import AuctionPhaseSection from '@/components/common/AuctionPhaseSection';
+import { useAuctionPhase } from '@/hooks/useAuctionPhase';
 import { useNavigationTiming } from '@/hooks/useNavigationTiming';
 import { useKeyHolders } from '@/hooks/useKeyHolders';
 import { useProfileStore } from '@/hooks/useProfileStore';
 import { useWalletHoldings, useTradeMutation } from '@/hooks/useWallet';
+import CoCreatorSection from '@/components/creator/CoCreatorSection';
 import ShareTwitterButton from '@/components/common/ShareTwitterButton';
 import { PriceHistoryChart } from '@/components/common/PriceHistoryChart';
 import type { PriceHistoryInterval } from '@/services/course.service';
@@ -46,6 +59,7 @@ import { useKeyConfig } from '@/hooks/useKeyConfig';
 import KeyStatsPanel from '@/components/common/KeyStatsPanel';
 import Skeleton from '@/components/ui/skeleton';
 import { Tooltip } from '@/components/ui/tooltip';
+import GraduatedCurveMilestoneChart from '@/components/common/GraduatedCurveMilestoneChart';
 import KeyDeprecationBanner from '@/components/common/KeyDeprecationBanner';
 import MergeProposalBanner from '@/components/common/MergeProposalBanner';
 import KeyBuybackModal from '@/components/common/KeyBuybackModal';
@@ -53,9 +67,13 @@ import type { KeyBuybackReceipt } from '@/hooks/useKeyBuyback';
 import { usePerformanceBond } from '@/hooks/usePerformanceBond';
 import PerformanceBondPanel from '@/components/common/PerformanceBondPanel';
 import WhitelistStatusBadge from '@/components/common/WhitelistStatusBadge';
+import ShareModal from '@/components/common/ShareModal';
+
 import { useTradeCooldownStatus, invalidateTradeCooldownStatus, resolveActiveTradeCooldown } from '@/hooks/useTradeCooldownStatus';
 import { isActiveCooldown, type ActiveTradeCooldown } from '@/utils/tradeCooldown.utils';
 import TradeCooldownButton from '@/components/common/TradeCooldownButton';
+import KeyHolderList from '@/components/common/KeyHolderList';
+import HolderConcentrationChart from '@/components/common/HolderConcentrationChart';
 function CreatorDetailPageContent() {
 	usePurchaseConfetti();
 
@@ -66,6 +84,10 @@ function CreatorDetailPageContent() {
 	const [buybackModalOpen, setBuybackModalOpen] = useState(false);
 	const [recentSettlement, setRecentSettlement] =
 		useState<KeyBuybackReceipt | null>(null);
+	const [shareModalOpen, setShareModalOpen] = useState(false);
+	const [lastPurchasedAmount, setLastPurchasedAmount] =
+		useState<number | null>(null);
+	const [deprecationDismissed, setDeprecationDismissed] = useState(false);
 	const {
 		data: creator,
 		isLoading,
@@ -102,7 +124,8 @@ function CreatorDetailPageContent() {
 		});
 	}, [creator, recordVisit]);
 
-	useKeyHolders(id || '');
+	const { holders, hasNextPage, isFetchingNextPage, fetchNextPage } =
+		useKeyHolders(id || '');
 
 	// User holdings for Share to X button
 	const profile = useProfileStore(state => state.profile);
@@ -149,6 +172,16 @@ function CreatorDetailPageContent() {
 	const performanceBond =
 		performanceBondData ?? creator?.performanceBond ?? null;
 
+
+	// Pre-launch auction phase (#924): a live tick that drives the countdown
+	// and flips the page back to the bonding curve view once the auction ends.
+	const { phase: auctionPhase } = useAuctionPhase({
+		auctionPrice: creator?.auctionPrice ?? null,
+		auctionSupply: creator?.auctionSupply ?? null,
+		auctionSold: creator?.auctionSold ?? null,
+		auctionEndsAt: creator?.auctionEndsAt ?? null,
+	});
+
 	// Whitelist gate check for early access keys (#1031)
 	const isWhitelistGateActive = Boolean(
 		creator?.isWhitelistEnabled ?? creator?.whitelistEnabled ?? false
@@ -164,12 +197,35 @@ function CreatorDetailPageContent() {
 		: false;
 	const isLockedOut = isWhitelistGateActive && !isUserWhitelisted;
 
-	// Track stale data indicator
-	useCreatorProfileStaleIndicator(
+
+	// On-chain metadata fetch (#1033)
+	const {
+		data: onChainMetadata,
+		isLoading: isOnChainLoading,
+		isError: isOnChainError,
+		refetch: refetchOnChainMetadata,
+	} = useOnChainMetadata(id || '');
+
+	const isFallbackActive = isOnChainError || !onChainMetadata;
+	const metadata = onChainMetadata ?? {};
+
+	const displayName = metadata.name || creator?.title || creator?.name || 'Unnamed creator';
+	const displaySymbol = metadata.symbol;
+	const displayDescription = metadata.description || creator?.description || creator?.bio;
+	const rawAvatar = metadata.image || metadata.imageCid || metadata.image_cid || metadata.ipfsCid || metadata.ipfs_cid || metadata.avatarUri || metadata.avatar_uri || metadata.cid;
+	const displayAvatar = resolveIpfsUrl(rawAvatar) || creator?.avatarUri || creator?.thumbnail;
+
+	// Track stale data indicator (including fallback active state)
+	const { shouldShowBadge, handleRefetch } = useCreatorProfileStaleIndicator(
 		id || '',
-		isFetching,
-		() => refetch()
+		isFetching || isOnChainLoading,
+		() => {
+			void refetch();
+			void refetchOnChainMetadata();
+		}
 	);
+
+	const showStaleIndicator = shouldShowBadge || isFallbackActive;
 
 	const [buyDialogOpen, setBuyDialogOpen] = useState(false);
 	const [tradeSubmitting, setTradeSubmitting] = useState(false);
@@ -214,6 +270,8 @@ function CreatorDetailPageContent() {
 				}`
 			);
 			setBuyDialogOpen(false);
+			setLastPurchasedAmount(amount);
+			setShareModalOpen(true);
 		} catch (error) {
 			showToast.error(getSignatureErrorMessage(error));
 		} finally {
@@ -255,12 +313,39 @@ function CreatorDetailPageContent() {
 		throw error;
 	}
 
+	const feeItems = [
+		{
+			label: 'Creator fee',
+			value: bpsToPercent(creator.creatorFeeBps),
+			helperText: 'Fee paid directly to the creator on each trade.',
+		},
+		{
+			label: 'Protocol fee',
+			value: bpsToPercent(creator.protocolFeeBps),
+			helperText: 'Fee paid to the platform for protocol maintenance.',
+		},
+	];
 
+	// During the pre-launch auction phase (#808/#924) the bonding curve price
+	// is not live yet — surface the current highest bid (or early-access price).
+	const auctionLeadBid =
+		auctionPhase === 'active'
+			? resolveHighestBid(creator.auctionBids, creator.auctionHighestBid)
+			: null;
+	const auctionStatValue =
+		auctionLeadBid != null
+			? formatAuctionBidAmount(auctionLeadBid)
+			: creator.auctionPrice != null && creator.auctionPrice > 0
+				? formatAuctionBidAmount(creator.auctionPrice)
+				: '—';
 
 	const statItems = [
 		{
-			label: 'Current Price',
-			value: formatDisplayKeyPrice(resolveCreatorKeyPriceStroops(creator)),
+			label: auctionPhase === 'active' ? 'Current Highest Bid' : 'Current Price',
+			value:
+				auctionPhase === 'active'
+					? auctionStatValue
+					: formatDisplayKeyPrice(resolveCreatorKeyPriceStroops(creator)),
 		},
 		{
 			label: 'Key Supply',
@@ -314,6 +399,12 @@ function CreatorDetailPageContent() {
 	return (
 		<main className="min-h-screen bg-[#06111f] px-6 py-16 text-white md:px-12">
 			<div className="mx-auto max-w-7xl space-y-8">
+				{creator.deprecation && !deprecationDismissed && (
+					<DeprecationBanner
+						deprecation={creator.deprecation}
+						onDismiss={() => setDeprecationDismissed(true)}
+					/>
+				)}
 				<CreatorBreadcrumb
 					parentLabel="Marketplace"
 					parentHref="/"
@@ -336,16 +427,26 @@ function CreatorDetailPageContent() {
 					isConnected={Boolean(userAddress)}
 				/>
 				<div className="flex items-start gap-3">
-					<div className="min-w-0 flex-1">
+					<div className="min-w-0 flex-1 space-y-2">
+						<CreatorProfileStaleIndicator
+							visible={showStaleIndicator}
+							isRefetching={isFetching || isOnChainLoading}
+							onRefresh={() => {
+								void refetch();
+								void refetchOnChainMetadata();
+							}}
+						/>
 						<CreatorProfileHeader
-							name={creator.title}
+							name={displayName}
+							symbol={displaySymbol}
 							handle={creator.socialHandle || creator.instructorId}
 							creatorId={creator.id}
 							isVerified={creator.isVerified}
-							avatarUrl={creator.thumbnail}
-							bio={creator.description}
+							avatarUrl={displayAvatar}
+							bio={displayDescription}
 							priceStroops={resolveCreatorKeyPriceStroops(creator)}
 							showBackButton={hasMounted}
+							isOnChainLoading={isOnChainLoading}
 							onBack={() => {
 								if (
 									window.history.length > 1 &&
@@ -360,7 +461,7 @@ function CreatorDetailPageContent() {
 					</div>
 					<WatchlistButton
 						creator={creator}
-						labelName={creator.title}
+						labelName={displayName}
 						// ≥44px tap target on mobile (WCAG 2.5.5); compact on sm+.
 						className="mt-3 size-11 shrink-0 sm:size-9"
 					/>
@@ -378,6 +479,7 @@ function CreatorDetailPageContent() {
 				<div data-testid="creator-stat-cards">
 					<CreatorProfileStatRow items={statItems} />
 				</div>
+
 				{/* Key Stats Panel (#952) */}
 				<KeyStatsPanel
 					stats={keyStats}
@@ -459,6 +561,23 @@ function CreatorDetailPageContent() {
 						/>
 					)}
 				</div>
+
+
+				{/* Pre-Launch Auction Phase (#924) */}
+				{auctionPhase !== 'inactive' && (
+					<AuctionPhaseSection
+						creatorId={creator.id}
+						auctionPrice={creator.auctionPrice}
+						auctionSupply={creator.auctionSupply}
+						auctionSold={creator.auctionSold}
+						auctionEndsAt={creator.auctionEndsAt}
+						auctionMinIncrement={creator.auctionMinIncrement}
+						auctionHighestBid={creator.auctionHighestBid}
+						auctionBids={creator.auctionBids}
+					/>
+				)}
+
+
 				{/* Buy Cooldown Countdown (only meaningful for authenticated users) */}
 				{userAddress && !isTradeCooldownActive && (
 					<BuyCooldownCountdown nextBuyAllowedAt={nextBuyAllowedAt} />
@@ -473,8 +592,13 @@ function CreatorDetailPageContent() {
 						).replace(' XLM', '')}
 						userAddress={userAddress}
 						userHoldingsCount={holdingsCount}
+						onClick={() => {
+							setLastPurchasedAmount(holdingsCount);
+							setShareModalOpen(true);
+						}}
 					/>
 				</div>
+
 				{isTwapLoading ? (
 					<div
 						className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4"
@@ -550,14 +674,132 @@ function CreatorDetailPageContent() {
 					height={300}
 				/>
 				</div>
+				<GraduatedCurveMilestoneChart
+					keyId={creator.id}
+					currentSupply={creator.creatorShareSupply ?? 0}
+				/>
+				{/* Buy Simulation Tool */}
+				<KeySimulationTool
+					currentSupply={creator.creatorShareSupply ?? 100}
+					protocolFeeBps={creator.protocolFeeBps}
+					creatorFeeBps={creator.creatorFeeBps}
+				/>
+
+
+				{/* TWAP for the live curve — not meaningful during the pre-launch auction */}
+				{auctionPhase !== 'active' &&
+					(isTwapLoading ? (
+						<div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4" data-testid="twap-price">
+							<div aria-label="Loading 24 hour TWAP" role="status"><Skeleton className="h-3 w-24" /><Skeleton className="mt-2 h-6 w-32" /></div>
+						</div>
+					) : twapPrice != null ? (
+						<div className="rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4" data-testid="twap-price">
+							<div className="flex items-center justify-between gap-4">
+								<div>
+									<div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/55">
+										<span className={twapDelta != null ? (twapDelta < 0 ? 'text-emerald-400' : 'text-rose-400') : ''}>TWAP (24h)</span>
+										<Tooltip content="Time-weighted average price over the past 24 hours. Less sensitive to short-term manipulation.">
+											<button type="button" aria-label="What is 24 hour TWAP?" className="text-white/50">ⓘ</button>
+										</Tooltip>
+									</div>
+									<div className="mt-1 text-xl font-bold text-white">{formatDisplayKeyPrice(twapPrice)}</div>
+								</div>
+								{twapDelta != null && <span className={twapDelta < 0 ? 'text-sm font-semibold text-emerald-400' : 'text-sm font-semibold text-rose-400'}>{twapDelta < 0 ? '▼' : '▲'} {formatDisplayKeyPrice(Math.abs(twapDelta))} vs spot</span>}
+							</div>
+						</div>
+					) : null)}
+
+				{/* Staking Rewards */}
+				<StakingRewardsSection {...stakingStats} isLoading={isLoading} />
+
+				{/* Price Chart — hidden during the pre-launch auction phase (#924) and
+				shown again once the auction closes and the curve activates */}
+				{auctionPhase !== 'active' && (
+					<div
+						className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8"
+						data-testid="creator-chart-container"
+					>
+						<h2 className="font-grotesque text-xl font-black tracking-tight text-white mb-6">
+							Price Curve
+						</h2>
+						<BondingCurveChart
+							data={chartData}
+							currentSupply={creator.creatorShareSupply ?? 100}
+							height={300}
+						/>
+					</div>
+				)}
+
+				{/* Buy Simulation Tool — likewise only once the curve is live */}
+				{auctionPhase !== 'active' && (
+					<KeySimulationTool
+						currentSupply={creator.creatorShareSupply ?? 100}
+						protocolFeeBps={creator.protocolFeeBps}
+						creatorFeeBps={creator.creatorFeeBps}
+					/>
+				)}
+
+
+				{/* Holder Concentration */}
+				<div
+					className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8"
+					data-testid="holder-concentration-container"
+				>
+					<h2 className="font-grotesque text-xl font-black tracking-tight text-white mb-6">
+						Holder Concentration
+					</h2>
+					<HolderConcentrationChart
+						holders={holders}
+						totalSupply={creator.creatorShareSupply}
+					/>
+				</div>
+				{/* Fee Structure */}
+				<div className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8">
+					<div className="flex items-center justify-between gap-4 mb-6">
+						<h2 className="font-grotesque text-xl font-black tracking-tight text-white">
+							Fee Structure
+						</h2>
+						<CreatorProfileStaleIndicator
+							visible={shouldShowBadge}
+							isRefetching={isFetching}
+							onRefresh={handleRefetch}
+						/>
+					</div>
+					<CreatorProfileInfoGrid items={feeItems} />
+				</div>
+				{/* Co-Creator Section */}{' '}
+				<CoCreatorSection
+					courseId={creator.id}
+					coCreatorAddress={creator.coCreatorAddress}
+					coCreatorSplitBps={creator.coCreatorSplitBps}
+					totalPaidToCoCreator={creator.totalPaidToCoCreator}
+					totalPaidToCreator={creator.totalPaidToCreator}
+				/>
+				{/* Key Holders */}
+				<div
+					data-testid="creator-holders-container"
+					className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8"
+				>
+					<h2 className="font-grotesque text-xl font-black tracking-tight text-white mb-6">
+						Key Holders
+					</h2>
+					<KeyHolderList
+						holders={holders}
+						hasNextPage={hasNextPage}
+						isFetchingNextPage={isFetchingNextPage}
+						fetchNextPage={() => {
+							void fetchNextPage();
+						}}
+					/>
+				</div>
 
 				{/* Gated Content */}
 				<div className="rounded-[2rem] border border-white/10 bg-white/[0.02] p-6 shadow-2xl backdrop-blur-md md:p-8">
 					<h2 className="font-grotesque text-xl font-black tracking-tight text-white mb-6">
 						Exclusive Content
 					</h2>
-					<SubscriptionAccessGate 
-						creatorId={creator.id} 
+					<SubscriptionAccessGate
+						creatorId={creator.id}
 						minimumHolding={1}
 						onBuyClick={() => setBuyDialogOpen(true)}
 					>
@@ -607,6 +849,23 @@ function CreatorDetailPageContent() {
 						onConfirm={handleConfirmBuy}
 						isSubmitting={tradeSubmitting}
 						requireConfirmation={true}
+					/>
+				)}
+				{creator && (
+					<ShareModal
+						open={shareModalOpen}
+						onOpenChange={setShareModalOpen}
+						creatorId={creator.id}
+						creatorName={creator.title || creator.name || 'Creator'}
+						amount={
+							lastPurchasedAmount ??
+							(holdingsCount > 0 ? holdingsCount : null)
+						}
+						priceXlm={formatDisplayKeyPrice(
+							resolveCreatorKeyPriceStroops(creator)
+						).replace(' XLM', '')}
+						userAddress={userAddress}
+						onDismiss={() => setShareModalOpen(false)}
 					/>
 				)}
 			</div>
