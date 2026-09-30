@@ -38,8 +38,6 @@ import RecentActivityBadge from '@/components/common/RecentActivityBadge';
 import toast from 'react-hot-toast';
 import showToast from '@/utils/toast.util';
 import { formatCompactNumber } from '@/utils/numberFormat.utils';
-import { formatCreatorHandle } from '@/utils/handleDisplay.utils';
-import { formatCreatorKeyPriceDisplay } from '@/utils/keyPriceDisplay.utils';
 import {
 	formatCreatorHandle,
 	truncateHandle,
@@ -678,7 +676,7 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 						size="sm"
 						isPending={transactionState === 'submitting'}
 						pendingText="Processing..."
-						disabled={isNetworkMismatch}
+						disabled={isNetworkMismatch || isKeyDeprecated(creator)}
 						className={cn(
 							'rounded-xl font-bold',
 							!isConnected && 'border-white/10  hover:bg-white/5'
@@ -694,51 +692,17 @@ const CreatorCard: React.FC<CreatorCardProps> = ({
 							<TransactionStatusIcon status="failed" />
 						)}
 						<ShoppingCart className="creator-action-icon" />
-						{transactionState === 'submitting'
-				<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-					<NetworkFeeHint className="shrink-0" />
-					<span className="hidden sm:inline text-xs text-white/40">
-						Press{' '}
-						<kbd className="px-1.5 py-0.5 rounded bg-white/10 text-white/60 font-mono">
-							B
-						</kbd>{' '}
-						to quick buy
-					</span>
-				</div>
-				<AsyncButton
-					onClick={handleBuy}
-					variant={isConnected ? 'default' : 'outline'}
-					size="sm"
-					isPending={transactionState === 'submitting'}
-					pendingText="Processing..."
-					disabled={isNetworkMismatch || isKeyDeprecated(creator)}
-					className={cn(
-						'rounded-xl font-bold',
-						!isConnected && 'border-white/10  hover:bg-white/5'
-					)}
-				>
-					{transactionState === 'success' && (
-						<TransactionStatusIcon status="success" />
-					)}
-					{transactionState === 'submitting' && (
-						<TransactionStatusIcon status="pending" />
-					)}
-					{transactionState === 'failed' && (
-						<TransactionStatusIcon status="failed" />
-					)}
-					<ShoppingCart className="creator-action-icon" />
-					{isKeyDeprecated(creator)
-						? 'Key Deprecated'
-						: transactionState === 'submitting'
-							? 'Processing...'
-							: transactionState === 'success'
-								? 'Completed'
-								: transactionState === 'failed'
-									? 'Retry Purchase'
-									: 'Buy Key'}
+						{isKeyDeprecated(creator)
+							? 'Key Deprecated'
+							: transactionState === 'submitting'
+								? 'Processing...'
+								: transactionState === 'success'
+									? 'Completed'
+									: transactionState === 'failed'
+										? 'Retry Purchase'
+										: 'Buy Key'}
 					</AsyncButton>
 				</div>
-				</AsyncButton>
 			</div>
 
 			<BuyActionHelperText

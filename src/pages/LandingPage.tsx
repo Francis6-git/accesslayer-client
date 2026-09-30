@@ -56,6 +56,7 @@ import {
 	useRedeemDeprecatedKeyMutation,
 	type SelfFreezeAction,
 } from '@/hooks/useWallet';
+import toast from 'react-hot-toast';
 import showToast from '@/utils/toast.util';
 import { getSignatureErrorMessage } from '@/utils/errorHandling.utils';
 import { formatCompactNumber, formatNumber } from '@/utils/numberFormat.utils';
@@ -365,9 +366,6 @@ function LandingPage() {
 			setBatchSubmitting(false);
 		}
 	};
-	const [sortOption, setSortOption] = useState<SortOption>(() => {
-		const sort = searchParams.get('sort') as SortOption | null;
-		if (sort && ['featured', 'price-asc', 'price-desc', 'supply-desc'].includes(sort)) {
 	const [sortOption, setSortOption] = useState<CourseSortOption>(() => {
 		const sort = searchParams.get('sort') as CourseSortOption | null;
 		if (
