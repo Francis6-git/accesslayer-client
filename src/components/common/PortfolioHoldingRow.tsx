@@ -1,16 +1,26 @@
 import React, { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import LockupCountdown from '@/components/common/LockupCountdown';
+import TradeCooldownButton from '@/components/common/TradeCooldownButton';
 import ReinvestDividendDialog from '@/components/common/ReinvestDividendDialog';
 import DeprecationNotice from '@/components/common/DeprecationNotice';
 import RedeemKeyDialog from '@/components/common/RedeemKeyDialog';
 import { computeRemainingLockupSeconds } from '@/utils/lockupCountdown.utils';
 import { formatNumber } from '@/utils/numberFormat.utils';
 import { formatDisplayKeyPrice, resolveCreatorKeyPriceStroops } from '@/utils/keyPriceDisplay.utils';
+import {
+	calculatePositionPnL,
+	formatPnLDisplay,
+	formatPnLPercentage,
+	getPnLTone,
+	getPnLToneChipClassName,
+	type HeldKeyPosition,
+} from '@/utils/portfolioValue.utils';
 import { hasUnclaimedDividend, xlmToStroops } from '@/utils/reinvestDividend.utils';
 import { isKeyDeprecated } from '@/utils/keyDeprecation.utils';
-import { TrendingUp } from 'lucide-react';
-import type { HeldKeyPosition } from '@/utils/portfolioValue.utils';
+import { isActiveCooldown } from '@/utils/tradeCooldown.utils';
+import type { ActiveTradeCooldown } from '@/utils/tradeCooldown.utils';
+import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import type { Course } from '@/services/course.service';
 import { cn } from '@/lib/utils';
 
@@ -29,6 +39,11 @@ export interface PortfolioHoldingRowProps {
 	isReinvesting?: boolean;
 	isRedeeming?: boolean;
 	isNetworkMismatch?: boolean;
+	/**
+	 * Active trade cooldown for this key (#998). When present, the Buy and
+	 * Sell buttons are replaced by a disabled countdown until it expires.
+	 */
+	tradeCooldown?: ActiveTradeCooldown | null;
 }
 
 export const PortfolioHoldingRow: React.FC<PortfolioHoldingRowProps> = ({
@@ -46,6 +61,7 @@ export const PortfolioHoldingRow: React.FC<PortfolioHoldingRowProps> = ({
 	isReinvesting = false,
 	isRedeeming = false,
 	isNetworkMismatch = false,
+	tradeCooldown = null,
 }) => {
 	const initialRemaining = computeRemainingLockupSeconds(position.last_buy_timestamp);
 	const [isLocked, setIsLocked] = useState(initialRemaining > 0);
@@ -58,6 +74,29 @@ export const PortfolioHoldingRow: React.FC<PortfolioHoldingRowProps> = ({
 	const hasDividends = hasUnclaimedDividend(position.unclaimedDividend);
 	const keyPriceStroops = resolveCreatorKeyPriceStroops(position);
 	const deprecated = isKeyDeprecated(creator);
+
+	// #935 — unrealised P&L for this position: what the keys would fetch if sold
+	// at the current bonding-curve sell price, less what was paid for them.
+	const positionPnL = calculatePositionPnL(position);
+	const pnlTone = getPnLTone(positionPnL.unrealisedPnLStroops);
+	const PnlIcon =
+		pnlTone === 'positive' ? TrendingUp : pnlTone === 'negative' ? TrendingDown : Minus;
+	const pnlLabel =
+		positionPnL.status === 'loading'
+			? 'Refreshing price'
+			: positionPnL.status === 'unavailable'
+				? 'Unavailable'
+				: positionPnL.unrealisedPnLStroops == null
+					? 'No cost basis'
+					: `${formatPnLDisplay(positionPnL.unrealisedPnLStroops)} (${formatPnLPercentage(
+							positionPnL.pnlPercentage ?? 0
+						)})`;
+
+	// #998 — the per-key trade cooldown disables both buy and sell for the
+	// window configured by the creator; the countdown drives the labels.
+	const tradeCooldownActive = isActiveCooldown(tradeCooldown)
+		? (tradeCooldown as ActiveTradeCooldown)
+		: null;
 
 	const handleConfirmReinvest = async () => {
 		if (!onReinvest) return;
@@ -100,6 +139,40 @@ export const PortfolioHoldingRow: React.FC<PortfolioHoldingRowProps> = ({
 						: position.isPriceStale
 							? 'Price stale'
 							: formatDisplayKeyPrice(resolveCreatorKeyPriceStroops(position))}
+				</div>
+				<div
+					className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
+					data-testid="holding-pnl"
+				>
+					<span className="text-white/45">
+						Avg buy{' '}
+						<span className="font-semibold text-white/80">
+							{positionPnL.averagePurchasePriceStroops == null
+								? '—'
+								: formatDisplayKeyPrice(positionPnL.averagePurchasePriceStroops)}
+						</span>
+					</span>
+					<span className="text-white/45">
+						Current{' '}
+						<span className="font-semibold text-white/80">
+							{positionPnL.currentValueStroops == null
+								? '—'
+								: formatDisplayKeyPrice(positionPnL.currentValueStroops)}
+						</span>
+					</span>
+					<span
+						className={cn(
+							'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[0.65rem] font-semibold',
+							getPnLToneChipClassName(positionPnL.unrealisedPnLStroops)
+						)}
+						data-testid="holding-pnl-value"
+						data-pnl-tone={pnlTone}
+						title="Unrealised P&L: current bonding curve sell price less average purchase price"
+					>
+						<PnlIcon className="size-3" aria-hidden="true" />
+						<span>{pnlLabel}</span>
+					</span>
+					<span className="sr-only">unrealised P&amp;L</span>
 				</div>
 				{hasDividends && (
 					<span
@@ -151,27 +224,45 @@ export const PortfolioHoldingRow: React.FC<PortfolioHoldingRowProps> = ({
 								</Button>
 							)}
 							{onBuy && (
-								<Button
+								<TradeCooldownButton
+									cooldown={tradeCooldownActive}
+									label="Buy"
+									variant="default"
 									size="sm"
 									className="rounded-xl"
 									onClick={() => onBuy(position.creatorId)}
-									disabled={isNetworkMismatch || isSubmitting}
-									data-testid="holding-buy-button"
-								>
-									Buy
-								</Button>
+									buttonProps={{
+										'data-testid': 'holding-buy-button',
+										disabled: isNetworkMismatch || isSubmitting || undefined,
+										'aria-disabled':
+											isNetworkMismatch || isSubmitting || undefined,
+									}}
+								/>
 							)}
 							{onSell && (
-								<Button
-									size="sm"
+								<TradeCooldownButton
+									cooldown={tradeCooldownActive}
+									label="Sell"
 									variant="outline"
+									size="sm"
 									className="rounded-xl"
 									onClick={() => onSell(position.creatorId)}
-									disabled={isLocked || isLiquidEmpty || isNetworkMismatch || isSubmitting}
-									data-testid="holding-sell-button"
-								>
-									Sell
-								</Button>
+									buttonProps={{
+										'data-testid': 'holding-sell-button',
+										disabled:
+											isLocked ||
+											isLiquidEmpty ||
+											isNetworkMismatch ||
+											isSubmitting ||
+											undefined,
+										'aria-disabled':
+											isLocked ||
+											isLiquidEmpty ||
+											isNetworkMismatch ||
+											isSubmitting ||
+											undefined,
+									}}
+								/>
 							)}
 						</>
 					)}
